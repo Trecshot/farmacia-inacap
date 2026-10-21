@@ -1,0 +1,30 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+dist-ssr/
+generated/
+
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# Backups and archives
+*.zip
+*.tar.gz
+*.7z
+backup-*/
+backend-pack/
+farmagestion-frontend-editable-*/
+
+# Logs & OS/Editor files
+logs/
+*.log
+npm-debug.log*
+.DS_Store
+~$*
+.vscode/*
+!.vscode/extensions.json
+.idea/
