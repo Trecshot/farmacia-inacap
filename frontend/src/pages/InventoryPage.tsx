@@ -1,47 +1,18 @@
-import {
-  AlertTriangle,
-  ArrowLeftRight,
-  Boxes,
-  CheckCircle2,
-  PackageCheck,
-  RefreshCcw,
-  Search,
-  SlidersHorizontal,
-} from "lucide-react";
+import { AlertTriangle, RefreshCcw } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
+import {
+  BatchStockTable,
+  type InventoryAlertItem,
+  type InventoryLocationItem,
+  type InventoryStockItem,
+} from "../components/inventory/BatchStockTable";
 import { ActionModal, type ActionField } from "../components/ui/ActionModal";
 import { PageLoader } from "../components/feedback/PageLoader";
 import { PageHeader } from "../components/ui/PageHeader";
-import { ResponsiveTable } from "../components/ui/ResponsiveTable";
-import { StatusBadge } from "../components/ui/StatusBadge";
 import { useAuth } from "../context/AuthContext";
 import { useResource } from "../hooks/useResource";
 import { api } from "../lib/api";
 import { nullable, numeric, runApiAction } from "../lib/actionHelpers";
-import { translateChoiceLabel } from "../lib/choiceLabels";
-
-type Location = { id: string; code: string; name: string; isActive: boolean };
-type Stock = {
-  id: string;
-  quantity: number;
-  reservedQuantity: number;
-  location: Location;
-  batch: {
-    id: string;
-    batchNumber: string;
-    expirationDate: string;
-    product: { id: string; sku: string; name: string };
-  };
-};
-type Alert = {
-  id: string;
-  type: string;
-  status: string;
-  title?: string;
-  message?: string;
-  product?: { name: string } | null;
-  batch?: { batchNumber: string } | null;
-};
 
 type FormValues = Record<string, string | number | boolean>;
 
@@ -65,27 +36,36 @@ export const InventoryPage = () => {
 
   const [q, setQ] = useState("");
   const [modal, setModal] = useState<"adjust" | "transfer" | null>(null);
-  const [selected, setSelected] = useState<Stock | null>(null);
+  const [selected, setSelected] = useState<InventoryStockItem | null>(null);
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState("");
   const [todayIso] = useState(() => new Date().toISOString());
 
-  const stockSel = useCallback((p: { items: Stock[] }) => p.items, []);
-  const locSel = useCallback((p: { locations: Location[] }) => p.locations, []);
-  const alertSel = useCallback((p: { alerts: Alert[] }) => p.alerts, []);
+  const stockSel = useCallback(
+    (p: { items: InventoryStockItem[] }) => p.items,
+    [],
+  );
+  const locSel = useCallback(
+    (p: { locations: InventoryLocationItem[] }) => p.locations,
+    [],
+  );
+  const alertSel = useCallback(
+    (p: { alerts: InventoryAlertItem[] }) => p.alerts,
+    [],
+  );
 
-  const stockRes = useResource<Stock[], { items: Stock[] }>(
-    "/inventory/stock?limit=100",
-    stockSel,
-  );
-  const locRes = useResource<Location[], { locations: Location[] }>(
-    "/inventory/locations",
-    locSel,
-  );
-  const alertRes = useResource<Alert[], { alerts: Alert[] }>(
-    "/inventory/alerts",
-    alertSel,
-  );
+  const stockRes = useResource<
+    InventoryStockItem[],
+    { items: InventoryStockItem[] }
+  >("/inventory/stock?limit=100", stockSel);
+  const locRes = useResource<
+    InventoryLocationItem[],
+    { locations: InventoryLocationItem[] }
+  >("/inventory/locations", locSel);
+  const alertRes = useResource<
+    InventoryAlertItem[],
+    { alerts: InventoryAlertItem[] }
+  >("/inventory/alerts", alertSel);
 
   const rows = useMemo(() => stockRes.data ?? [], [stockRes.data]);
   const locations = useMemo(() => locRes.data ?? [], [locRes.data]);
@@ -251,208 +231,28 @@ export const InventoryPage = () => {
         </div>
       ) : null}
       {!stockRes.loading ? (
-        <>
-          <section className="module-v2__kpis">
-            <article className="module-kpi">
-              <span className="module-kpi__icon module-kpi__icon--green">
-                <PackageCheck size={19} />
-              </span>
-              <div>
-                <span>Disponible</span>
-                <strong>{available}</strong>
-                <small>Unidades</small>
-              </div>
-            </article>
-            <article className="module-kpi">
-              <span className="module-kpi__icon module-kpi__icon--blue">
-                <Boxes size={19} />
-              </span>
-              <div>
-                <span>Lotes</span>
-                <strong>{rows.length}</strong>
-                <small>Con stock</small>
-              </div>
-            </article>
-            <article className="module-kpi">
-              <span className="module-kpi__icon module-kpi__icon--amber">
-                <AlertTriangle size={19} />
-              </span>
-              <div>
-                <span>Alertas</span>
-                <strong>{pendingAlerts}</strong>
-                <small>Pendientes</small>
-              </div>
-            </article>
-            <article className="module-kpi">
-              <span className="module-kpi__icon module-kpi__icon--danger">
-                <AlertTriangle size={19} />
-              </span>
-              <div>
-                <span>Vencidos</span>
-                <strong>{expired}</strong>
-                <small>Lotes</small>
-              </div>
-            </article>
-          </section>
-
-          {pendingAlertsList.length ? (
-            <section className="module-panel">
-              <div className="module-panel__header">
-                <div>
-                  <span className="module-panel__eyebrow">Seguimiento</span>
-                  <h2>Alertas pendientes</h2>
-                </div>
-              </div>
-              <ResponsiveTable
-                rows={pendingAlertsList}
-                getKey={(a) => a.id}
-                columns={[
-                  {
-                    key: "type",
-                    header: "Tipo",
-                    render: (a) => translateChoiceLabel(a.type),
-                  },
-                  {
-                    key: "product",
-                    header: "Producto / Lote",
-                    render: (a) => (
-                      <div className="cell-stack">
-                        <strong>{a.product?.name ?? a.title ?? "Alerta"}</strong>
-                        <span>
-                          {a.batch?.batchNumber
-                            ? `Lote ${a.batch.batchNumber}`
-                            : (a.message ?? "—")}
-                        </span>
-                      </div>
-                    ),
-                  },
-                  {
-                    key: "status",
-                    header: "Estado",
-                    render: (a) => <StatusBadge value={a.status} />,
-                  },
-                  {
-                    key: "actions",
-                    header: "Acciones",
-                    render: (a) =>
-                      canUpdate && a.status === "PENDING" ? (
-                        <div className="row-actions">
-                          <button
-                            className="row-action"
-                            disabled={busy}
-                            onClick={() => void resolveAlert(a.id)}
-                          >
-                            <CheckCircle2 size={12} /> Resolver
-                          </button>
-                        </div>
-                      ) : (
-                        <span>—</span>
-                      ),
-                  },
-                ]}
-              />
-            </section>
-          ) : null}
-
-          <section className="module-panel">
-            <div className="module-panel__header module-panel__header--filters">
-              <div>
-                <span className="module-panel__eyebrow">Existencias</span>
-                <h2>Inventario disponible</h2>
-              </div>
-              <label className="module-search">
-                <Search size={16} />
-                <input
-                  value={q}
-                  onChange={(e) => setQ(e.target.value)}
-                  placeholder="Producto, SKU, lote..."
-                />
-              </label>
-            </div>
-            {filtered.length ? (
-              <ResponsiveTable
-                rows={filtered}
-                getKey={(r) => r.id}
-                columns={[
-                  {
-                    key: "product",
-                    header: "Producto",
-                    render: (r) => (
-                      <div className="cell-stack">
-                        <strong>{r.batch.product.name}</strong>
-                        <span>{r.batch.product.sku}</span>
-                      </div>
-                    ),
-                  },
-                  {
-                    key: "batch",
-                    header: "Lote",
-                    render: (r) => r.batch.batchNumber,
-                  },
-                  {
-                    key: "loc",
-                    header: "Ubicación",
-                    render: (r) => r.location.name,
-                  },
-                  {
-                    key: "available",
-                    header: "Disponible",
-                    render: (r) => r.quantity - r.reservedQuantity,
-                  },
-                  {
-                    key: "expiry",
-                    header: "Vencimiento",
-                    render: (r) =>
-                      new Date(r.batch.expirationDate).toLocaleDateString(
-                        "es-CL",
-                      ),
-                  },
-                  {
-                    key: "actions",
-                    header: "Acciones",
-                    render: (r) =>
-                      canAdjust || canUpdate ? (
-                        <div className="row-actions">
-                          {canAdjust ? (
-                            <button
-                              className="row-action"
-                              onClick={() => {
-                                setSelected(r);
-                                setModal("adjust");
-                              }}
-                            >
-                              <SlidersHorizontal size={12} /> Ajustar
-                            </button>
-                          ) : null}
-                          {canUpdate ? (
-                            <button
-                              className="row-action"
-                              onClick={() => {
-                                setSelected(r);
-                                setModal("transfer");
-                              }}
-                            >
-                              <ArrowLeftRight size={12} /> Transferir
-                            </button>
-                          ) : null}
-                        </div>
-                      ) : (
-                        <span>—</span>
-                      ),
-                  },
-                ]}
-              />
-            ) : (
-              <div className="module-empty">
-                <span className="module-empty__icon">
-                  <Boxes size={27} />
-                </span>
-                <strong>Sin stock</strong>
-                <p>Las recepciones aparecerán aquí.</p>
-              </div>
-            )}
-          </section>
-        </>
+        <BatchStockTable
+          rows={rows}
+          filtered={filtered}
+          pendingAlertsList={pendingAlertsList}
+          available={available}
+          expired={expired}
+          pendingAlerts={pendingAlerts}
+          query={q}
+          busy={busy}
+          canUpdate={canUpdate}
+          canAdjust={canAdjust}
+          onQueryChange={setQ}
+          onResolveAlert={(alertId) => void resolveAlert(alertId)}
+          onOpenAdjust={(row) => {
+            setSelected(row);
+            setModal("adjust");
+          }}
+          onOpenTransfer={(row) => {
+            setSelected(row);
+            setModal("transfer");
+          }}
+        />
       ) : null}
       <ActionModal
         open={Boolean(modal)}

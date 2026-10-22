@@ -4,6 +4,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 
 import { useAuth } from "../../context/AuthContext";
 import { navigation } from "./navigation";
+import "./layout.module.css";
 
 const findRouteLabel = (pathname: string) => {
   for (const section of navigation) {

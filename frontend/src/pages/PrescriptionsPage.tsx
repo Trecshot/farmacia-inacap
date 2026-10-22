@@ -1,6 +1,12 @@
 import { FileText, Plus, Search } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
-import { ActionModal, type ActionField } from "../components/ui/ActionModal";
+import {
+  PrescriptionForm,
+  type ClinicalDoctor,
+  type ClinicalPatient,
+  type ClinicalProduct,
+  type PrescriptionFormValues,
+} from "../components/clinical/PrescriptionForm";
 import { PageLoader } from "../components/feedback/PageLoader";
 import { PageHeader } from "../components/ui/PageHeader";
 import { ResponsiveTable } from "../components/ui/ResponsiveTable";
@@ -11,21 +17,6 @@ import { api } from "../lib/api";
 import { nullable, numeric, runApiAction } from "../lib/actionHelpers";
 import { translateChoiceLabel } from "../lib/choiceLabels";
 
-type Patient = {
-  id: string;
-  rut: string;
-  firstName: string;
-  lastName: string;
-  isActive: boolean;
-};
-type Doctor = {
-  id: string;
-  firstName: string;
-  lastName: string;
-  rut: string;
-  isActive: boolean;
-};
-type Product = { id: string; sku: string; name: string; isActive: boolean };
 type Rx = {
   id: string;
   folio: string;
@@ -34,28 +25,18 @@ type Rx = {
   issueDate: string;
   expirationDate: string | null;
   status: string;
-  patient: Patient;
-  doctor: Doctor;
+  patient: ClinicalPatient;
+  doctor: ClinicalDoctor;
   items: Array<{
     id: string;
-    product: Product;
+    product: ClinicalProduct;
     prescribedQuantity: number;
     remainingQuantity: number;
   }>;
 };
-type FormValues = Record<string, string | number | boolean>;
 
 const norm = (v: string) =>
   v.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
-
-const cancelPrescriptionFields: ActionField[] = [
-  {
-    name: "reason",
-    label: "Motivo de cancelación",
-    type: "textarea",
-    required: true,
-  },
-];
 
 export const PrescriptionsPage = () => {
   const { hasPermission } = useAuth();
@@ -70,23 +51,32 @@ export const PrescriptionsPage = () => {
   const [todayDate] = useState(() => new Date().toISOString().slice(0, 10));
 
   const rxSel = useCallback((p: { items: Rx[] }) => p.items, []);
-  const patientSel = useCallback((p: { items: Patient[] }) => p.items, []);
-  const doctorSel = useCallback((p: { items: Doctor[] }) => p.items, []);
-  const productSel = useCallback((p: { items: Product[] }) => p.items, []);
+  const patientSel = useCallback(
+    (p: { items: ClinicalPatient[] }) => p.items,
+    [],
+  );
+  const doctorSel = useCallback(
+    (p: { items: ClinicalDoctor[] }) => p.items,
+    [],
+  );
+  const productSel = useCallback(
+    (p: { items: ClinicalProduct[] }) => p.items,
+    [],
+  );
 
   const rxRes = useResource<Rx[], { items: Rx[] }>(
     "/prescriptions?limit=100",
     rxSel,
   );
-  const patientsRes = useResource<Patient[], { items: Patient[] }>(
+  const patientsRes = useResource<ClinicalPatient[], { items: ClinicalPatient[] }>(
     "/patients?limit=100",
     patientSel,
   );
-  const doctorsRes = useResource<Doctor[], { items: Doctor[] }>(
+  const doctorsRes = useResource<ClinicalDoctor[], { items: ClinicalDoctor[] }>(
     "/doctors?limit=100",
     doctorSel,
   );
-  const productsRes = useResource<Product[], { items: Product[] }>(
+  const productsRes = useResource<ClinicalProduct[], { items: ClinicalProduct[] }>(
     "/products?limit=100",
     productSel,
   );
@@ -121,7 +111,7 @@ export const PrescriptionsPage = () => {
     setActionError("");
   };
 
-  const submit = async (v: FormValues) => {
+  const submit = async (v: PrescriptionFormValues) => {
     if (modal === "create") {
       await runApiAction(
         () =>
@@ -170,95 +160,6 @@ export const PrescriptionsPage = () => {
       );
     }
   };
-
-  const fields = useMemo<ActionField[]>(() => {
-    if (modal === "cancel") return cancelPrescriptionFields;
-    return [
-      { name: "folio", label: "Folio", required: true },
-      {
-        name: "origin",
-        label: "Origen",
-        type: "select",
-        required: true,
-        options: [
-          { value: "PHYSICAL", label: "Física" },
-          { value: "DIGITAL", label: "Digital" },
-        ],
-      },
-      {
-        name: "prescriptionType",
-        label: "Tipo receta",
-        type: "select",
-        required: true,
-        options: ["NONE", "SIMPLE", "RETAINED", "CHECK", "BALANCE_CONTROL"].map(
-          (v) => ({ value: v, label: translateChoiceLabel(v) }),
-        ),
-      },
-      { name: "issueDate", label: "Fecha emisión", type: "date", required: true },
-      { name: "expirationDate", label: "Vencimiento", type: "date" },
-      {
-        name: "patientId",
-        label: "Paciente",
-        type: "select",
-        required: true,
-        options: patients
-          .filter((p) => p.isActive)
-          .map((p) => ({
-            value: p.id,
-            label: `${p.rut} · ${p.firstName} ${p.lastName}`,
-          })),
-      },
-      {
-        name: "doctorId",
-        label: "Médico",
-        type: "select",
-        required: true,
-        options: doctors
-          .filter((d) => d.isActive)
-          .map((d) => ({
-            value: d.id,
-            label: `${d.firstName} ${d.lastName} · ${d.rut}`,
-          })),
-      },
-      {
-        name: "productId",
-        label: "Medicamento",
-        type: "select",
-        required: true,
-        options: products
-          .filter((p) => p.isActive)
-          .map((p) => ({ value: p.id, label: `${p.sku} · ${p.name}` })),
-      },
-      {
-        name: "prescribedQuantity",
-        label: "Cantidad prescrita",
-        type: "number",
-        min: 1,
-        required: true,
-      },
-      { name: "dosage", label: "Dosis" },
-      { name: "frequency", label: "Frecuencia" },
-      { name: "duration", label: "Duración" },
-      { name: "fileUrl", label: "URL archivo receta" },
-      { name: "retainedFileUrl", label: "URL receta retenida" },
-      { name: "notes", label: "Notas", type: "textarea" },
-      { name: "hasBalanceControl", label: "Control de saldo", type: "checkbox" },
-    ];
-  }, [modal, patients, doctors, products]);
-
-  const initialValues = useMemo<Record<string, unknown>>(
-    () =>
-      modal === "create"
-        ? {
-            origin: "PHYSICAL",
-            prescriptionType: "SIMPLE",
-            issueDate: todayDate,
-            prescribedQuantity: 1,
-            hasBalanceControl: false,
-          }
-        : {},
-    [modal, todayDate],
-  );
 
   return (
     <div className="module-v2">
@@ -427,11 +328,12 @@ export const PrescriptionsPage = () => {
           </section>
         </>
       ) : null}
-      <ActionModal
-        open={Boolean(modal)}
-        title={modal === "cancel" ? "Cancelar receta" : "Nueva receta"}
-        fields={fields}
-        initialValues={initialValues}
+      <PrescriptionForm
+        mode={modal}
+        patients={patients}
+        doctors={doctors}
+        products={products}
+        todayDate={todayDate}
         busy={busy}
         error={actionError}
         onClose={close}

@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import "./ui.module.css";
 
 export const PageHeader = ({
   eyebrow,

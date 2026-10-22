@@ -1,6 +1,7 @@
 import { X } from "lucide-react";
 import { useState, type FormEvent } from "react";
 import { translateChoiceLabel } from "../../lib/choiceLabels";
+import "./ui.module.css";
 
 export type ActionFieldOption = {
   value: string;

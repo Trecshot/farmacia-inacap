@@ -3,6 +3,7 @@ import { Outlet } from "react-router-dom";
 
 import { Sidebar } from "./Sidebar";
 import { Topbar } from "./Topbar";
+import "./layout.module.css";
 
 export const AppShell = () => {
   const [menuOpen, setMenuOpen] = useState(false);

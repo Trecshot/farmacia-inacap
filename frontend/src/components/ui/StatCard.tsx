@@ -1,4 +1,5 @@
 import type { LucideIcon } from "lucide-react";
+import "./ui.module.css";
 
 export const StatCard = ({
   title,

@@ -6,6 +6,7 @@ import { NavLink } from "react-router-dom";
 
 import { useAuth } from "../../context/AuthContext";
 import { navigation } from "./navigation";
+import "./layout.module.css";
 
 export const Sidebar = ({
   open,

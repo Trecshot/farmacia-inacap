@@ -9,7 +9,18 @@ generated/
 # Environment variables
 .env
 .env.*
+.env.local
+.env.*.local
 !.env.example
+
+# Artefactos de agentes y validadores locales
+.agents/
+skills-lock.json
+.tsupgrader/
+
+# Scripts temporales locales
+instalar_*.ps1
+corregir_*.ps1
 
 # Backups and archives
 *.zip

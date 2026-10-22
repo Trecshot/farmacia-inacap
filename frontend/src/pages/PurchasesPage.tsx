@@ -7,7 +7,14 @@ import {
   ShoppingBag,
 } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
-import { ActionModal, type ActionField } from "../components/ui/ActionModal";
+import {
+  PurchaseOrderForm,
+  type PurchaseLocation,
+  type PurchaseModalMode,
+  type PurchaseOrderItem,
+  type PurchaseProduct,
+  type PurchaseSupplier,
+} from "../components/inventory/PurchaseOrderForm";
 import { PageLoader } from "../components/feedback/PageLoader";
 import { PageHeader } from "../components/ui/PageHeader";
 import { ResponsiveTable } from "../components/ui/ResponsiveTable";
@@ -16,40 +23,7 @@ import { useAuth } from "../context/AuthContext";
 import { useResource } from "../hooks/useResource";
 import { api } from "../lib/api";
 import { nullable, numeric, runApiAction } from "../lib/actionHelpers";
-import { translateChoiceLabel } from "../lib/choiceLabels";
 
-type Supplier = {
-  id: string;
-  businessName: string;
-  rut: string;
-  isActive: boolean;
-};
-type Product = {
-  id: string;
-  name: string;
-  sku: string;
-  isActive: boolean;
-  purchasePrice?: number | string | null;
-};
-type Location = { id: string; name: string; isActive: boolean };
-type Detail = {
-  id: string;
-  productId: string;
-  quantityOrdered: number;
-  quantityReceived: number;
-  unitCost: number | string;
-  product: Product;
-};
-type Order = {
-  id: string;
-  code: string;
-  orderDate: string;
-  expectedDate?: string | null;
-  totalAmount: number | string;
-  status: string;
-  supplier: Supplier;
-  details: Detail[];
-};
 type FormValues = Record<string, string | number | boolean>;
 
 const clp = new Intl.NumberFormat("es-CL", {
@@ -60,66 +34,45 @@ const clp = new Intl.NumberFormat("es-CL", {
 const norm = (v: string) =>
   v.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
 
-const supplierFields: ActionField[] = [
-  { name: "rut", label: "RUT", required: true },
-  { name: "businessName", label: "Razón social", required: true },
-  { name: "tradeName", label: "Nombre fantasía" },
-  { name: "contactName", label: "Contacto" },
-  { name: "email", label: "Correo", type: "email" },
-  { name: "phone", label: "Teléfono" },
-  { name: "address", label: "Dirección" },
-  { name: "commune", label: "Comuna" },
-  { name: "region", label: "Región" },
-];
-
-const statusFields: ActionField[] = [
-  {
-    name: "status",
-    label: "Estado",
-    type: "select",
-    required: true,
-    options: ["DRAFT", "SENT", "CANCELLED"].map((v) => ({
-      value: v,
-      label: translateChoiceLabel(v),
-    })),
-  },
-];
-
 export const PurchasesPage = () => {
   const { hasPermission } = useAuth();
   const canCreate = hasPermission("purchases.create");
   const canReceive = hasPermission("purchases.receive");
 
   const [q, setQ] = useState("");
-  const [modal, setModal] = useState<
-    "order" | "supplier" | "status" | "receive" | null
-  >(null);
-  const [selected, setSelected] = useState<Order | null>(null);
+  const [modal, setModal] = useState<PurchaseModalMode>(null);
+  const [selected, setSelected] = useState<PurchaseOrderItem | null>(null);
   const [receiptCode, setReceiptCode] = useState("");
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState("");
 
-  const orderSel = useCallback((p: { items: Order[] }) => p.items, []);
-  const supSel = useCallback((p: { items: Supplier[] }) => p.items, []);
-  const prodSel = useCallback((p: { items: Product[] }) => p.items, []);
-  const locSel = useCallback((p: { locations: Location[] }) => p.locations, []);
+  const orderSel = useCallback(
+    (p: { items: PurchaseOrderItem[] }) => p.items,
+    [],
+  );
+  const supSel = useCallback((p: { items: PurchaseSupplier[] }) => p.items, []);
+  const prodSel = useCallback((p: { items: PurchaseProduct[] }) => p.items, []);
+  const locSel = useCallback(
+    (p: { locations: PurchaseLocation[] }) => p.locations,
+    [],
+  );
 
-  const ordersRes = useResource<Order[], { items: Order[] }>(
-    "/purchases?limit=100",
-    orderSel,
-  );
-  const suppliersRes = useResource<Supplier[], { items: Supplier[] }>(
-    "/suppliers?limit=100",
-    supSel,
-  );
-  const productsRes = useResource<Product[], { items: Product[] }>(
-    "/products?limit=100",
-    prodSel,
-  );
-  const locRes = useResource<Location[], { locations: Location[] }>(
-    "/inventory/locations",
-    locSel,
-  );
+  const ordersRes = useResource<
+    PurchaseOrderItem[],
+    { items: PurchaseOrderItem[] }
+  >("/purchases?limit=100", orderSel);
+  const suppliersRes = useResource<
+    PurchaseSupplier[],
+    { items: PurchaseSupplier[] }
+  >("/suppliers?limit=100", supSel);
+  const productsRes = useResource<
+    PurchaseProduct[],
+    { items: PurchaseProduct[] }
+  >("/products?limit=100", prodSel);
+  const locRes = useResource<
+    PurchaseLocation[],
+    { locations: PurchaseLocation[] }
+  >("/inventory/locations", locSel);
 
   const orders = useMemo(() => ordersRes.data ?? [], [ordersRes.data]);
   const suppliers = useMemo(() => suppliersRes.data ?? [], [suppliersRes.data]);
@@ -239,112 +192,6 @@ export const PurchasesPage = () => {
       );
     }
   };
-
-  const fields = useMemo<ActionField[]>(() => {
-    if (modal === "supplier") return supplierFields;
-    if (modal === "order") {
-      return [
-        { name: "code", label: "Código OC", required: true },
-        {
-          name: "supplierId",
-          label: "Proveedor",
-          type: "select",
-          required: true,
-          options: suppliers
-            .filter((s) => s.isActive)
-            .map((s) => ({ value: s.id, label: s.businessName })),
-        },
-        {
-          name: "productId",
-          label: "Producto",
-          type: "select",
-          required: true,
-          options: products
-            .filter((p) => p.isActive !== false)
-            .map((p) => ({ value: p.id, label: `${p.sku} · ${p.name}` })),
-        },
-        {
-          name: "quantityOrdered",
-          label: "Cantidad",
-          type: "number",
-          min: 1,
-          required: true,
-        },
-        {
-          name: "unitCost",
-          label: "Costo unitario",
-          type: "number",
-          min: 0,
-          required: true,
-        },
-        {
-          name: "taxRate",
-          label: "IVA %",
-          type: "number",
-          min: 0,
-          required: true,
-        },
-        { name: "expectedDate", label: "Fecha esperada", type: "date" },
-        { name: "notes", label: "Notas", type: "textarea" },
-      ];
-    }
-    if (modal === "status") return statusFields;
-    if (modal === "receive" && selected) {
-      const receiveFields: ActionField[] = [
-        { name: "code", label: "Código recepción", required: true },
-        { name: "notes", label: "Notas", type: "textarea" },
-      ];
-      selected.details
-        .filter((d) => d.quantityOrdered > d.quantityReceived)
-        .forEach((d) => {
-          receiveFields.push(
-            {
-              name: `batch_${d.productId}`,
-              label: `Lote · ${d.product.name}`,
-              required: true,
-            },
-            {
-              name: `expiry_${d.productId}`,
-              label: `Vencimiento · ${d.product.name}`,
-              type: "date",
-              required: true,
-            },
-            {
-              name: `qty_${d.productId}`,
-              label: `Cantidad · saldo ${d.quantityOrdered - d.quantityReceived}`,
-              type: "number",
-              min: 1,
-              required: true,
-            },
-            {
-              name: `price_${d.productId}`,
-              label: `Costo · ${d.product.name}`,
-              type: "number",
-              min: 0,
-              required: true,
-            },
-            {
-              name: `loc_${d.productId}`,
-              label: `Ubicación · ${d.product.name}`,
-              type: "select",
-              required: true,
-              options: locations
-                .filter((l) => l.isActive)
-                .map((l) => ({ value: l.id, label: l.name })),
-            },
-          );
-        });
-      return receiveFields;
-    }
-    return [];
-  }, [modal, suppliers, products, selected, locations]);
-
-  const initialValues = useMemo<Record<string, unknown>>(() => {
-    if (modal === "order") return { taxRate: 19, quantityOrdered: 1 };
-    if (modal === "receive") return { code: receiptCode };
-    if (modal === "status" && selected) return { status: selected.status };
-    return {};
-  }, [modal, receiptCode, selected]);
 
   return (
     <div className="module-v2">
@@ -550,19 +397,13 @@ export const PurchasesPage = () => {
           </section>
         </>
       ) : null}
-      <ActionModal
-        open={Boolean(modal)}
-        title={
-          modal === "supplier"
-            ? "Nuevo proveedor"
-            : modal === "order"
-              ? "Nueva orden de compra"
-              : modal === "status"
-                ? "Cambiar estado"
-                : "Recepcionar orden"
-        }
-        fields={fields}
-        initialValues={initialValues}
+      <PurchaseOrderForm
+        mode={modal}
+        selected={selected}
+        receiptCode={receiptCode}
+        suppliers={suppliers}
+        products={products}
+        locations={locations}
         busy={busy}
         error={actionError}
         onClose={close}

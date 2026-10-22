@@ -1,4 +1,5 @@
 import { translateChoiceLabel } from "../../lib/choiceLabels";
+import "./ui.module.css";
 
 const normalize = (value: string) => value.toLowerCase().replaceAll("_", "-");
 
