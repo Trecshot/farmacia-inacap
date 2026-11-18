@@ -49,6 +49,30 @@ type FefoAllocation = {
   unitCost: number | null;
 };
 
+type PreparedSaleItem = {
+  productId: string;
+  quantity: number;
+  discountAmount: number;
+  prescriptionItemId?: string | null;
+  locationId?: string | null;
+  product: {
+    id: string;
+    name: string;
+    salePrice: unknown;
+    requiresPrescription: boolean;
+    isControlled: boolean;
+  };
+  unitPrice: number;
+  lineGross: number;
+  lineNet: number;
+  lineTax: number;
+  lineTotal: number;
+};
+
+type PrescriptionItemWithRx = Prisma.PrescriptionItemGetPayload<{
+  include: { prescription: true };
+}>;
+
 const allocateFefo = async (
   tx: Prisma.TransactionClient,
   productId: string,
@@ -110,6 +134,303 @@ const allocateFefo = async (
   return allocations;
 };
 
+const validateInvoiceRequirements = (input: CheckoutInput) => {
+  if (
+    input.taxDocumentType === "INVOICE" &&
+    (!input.customerRut ||
+      !input.customerBusinessName ||
+      !input.customerBusinessActivity ||
+      !input.customerAddress)
+  ) {
+    throw new ApiError(
+      400,
+      "Para factura se requieren RUT, razón social, giro y dirección",
+    );
+  }
+};
+
+const validatePrescriptionItemForSale = (
+  item: CheckoutInput["items"][number],
+  product: PreparedSaleItem["product"],
+  patientId: string | null | undefined,
+  prescriptionItemMap: Map<string, PrescriptionItemWithRx>,
+  requestedByPrescriptionItem: Map<string, number>,
+) => {
+  if (
+    (product.requiresPrescription || product.isControlled) &&
+    !item.prescriptionItemId
+  ) {
+    throw new ApiError(400, `${product.name} requiere una receta válida`);
+  }
+
+  if (!item.prescriptionItemId) return;
+
+  const prescriptionItem = prescriptionItemMap.get(item.prescriptionItemId);
+
+  if (!prescriptionItem || prescriptionItem.productId !== product.id) {
+    throw new ApiError(400, "El ítem de receta no corresponde al producto");
+  }
+
+  if (!patientId || patientId !== prescriptionItem.prescription.patientId) {
+    throw new ApiError(
+      400,
+      "La receta médica no pertenece al paciente de la venta",
+    );
+  }
+
+  if (
+    prescriptionItem.prescription.status !== "ACTIVE" &&
+    prescriptionItem.prescription.status !== "PARTIALLY_DISPENSED"
+  ) {
+    throw new ApiError(
+      409,
+      "La receta no se encuentra disponible para dispensación",
+    );
+  }
+
+  if (
+    prescriptionItem.prescription.expirationDate &&
+    prescriptionItem.prescription.expirationDate <= new Date()
+  ) {
+    throw new ApiError(409, "La receta está vencida");
+  }
+
+  const totalRequested =
+    requestedByPrescriptionItem.get(item.prescriptionItemId) ?? item.quantity;
+
+  if (prescriptionItem.remainingQuantity < totalRequested) {
+    throw new ApiError(409, "La receta no tiene saldo suficiente");
+  }
+};
+
+const prepareCheckoutTotalsAndItems = (
+  input: CheckoutInput,
+  productMap: Map<string, PreparedSaleItem["product"]>,
+  prescriptionItemMap: Map<string, PrescriptionItemWithRx>,
+  requestedByPrescriptionItem: Map<string, number>,
+) => {
+  const preparedItems: PreparedSaleItem[] = [];
+  let subtotal = 0;
+  let discountAmount = 0;
+  let totalAmount = 0;
+  let exactNetSum = 0;
+  let exactTaxSum = 0;
+  const divisor = 1 + input.taxRate / 100;
+
+  for (const item of input.items) {
+    const product = productMap.get(item.productId)!;
+
+    validatePrescriptionItemForSale(
+      item,
+      product,
+      input.patientId,
+      prescriptionItemMap,
+      requestedByPrescriptionItem,
+    );
+
+    const unitPrice = asNumber(product.salePrice);
+    const lineGross = roundMoney(unitPrice * item.quantity);
+    const lineDiscount = roundMoney(item.discountAmount);
+
+    if (lineDiscount > lineGross) {
+      throw new ApiError(
+        400,
+        `El descuento de ${product.name} supera el total de la línea`,
+      );
+    }
+
+    const lineTotal = roundMoney(lineGross - lineDiscount);
+    const exactLineNet = lineTotal / divisor;
+    const exactLineTax = lineTotal - exactLineNet;
+    const lineNet = roundMoney(exactLineNet);
+    const lineTax = roundMoney(lineTotal - lineNet);
+
+    subtotal += lineGross;
+    discountAmount += lineDiscount;
+    totalAmount += lineTotal;
+    exactNetSum += exactLineNet;
+    exactTaxSum += exactLineTax;
+
+    preparedItems.push({
+      ...item,
+      discountAmount: lineDiscount,
+      product,
+      unitPrice,
+      lineGross,
+      lineNet,
+      lineTax,
+      lineTotal,
+    });
+  }
+
+  subtotal = roundMoney(subtotal);
+  discountAmount = roundMoney(discountAmount);
+  totalAmount = roundMoney(totalAmount);
+
+  const netAmount = roundMoney(exactNetSum);
+  const taxAmount =
+    netAmount + roundMoney(exactTaxSum) === totalAmount
+      ? roundMoney(exactTaxSum)
+      : roundMoney(totalAmount - netAmount);
+
+  const paymentsTotal = roundMoney(
+    input.payments.reduce((sum, payment) => sum + roundMoney(payment.amount), 0),
+  );
+
+  if (paymentsTotal !== totalAmount) {
+    throw new ApiError(
+      400,
+      `Los pagos (${paymentsTotal}) deben coincidir con el total de la venta (${totalAmount})`,
+    );
+  }
+
+  return {
+    preparedItems,
+    subtotal,
+    discountAmount,
+    netAmount,
+    taxAmount,
+    totalAmount,
+  };
+};
+
+const processSaleItemStockAndControlled = async (
+  tx: Prisma.TransactionClient,
+  saleId: string,
+  saleCode: string,
+  sellerId: string,
+  item: PreparedSaleItem,
+  prescriptionItemMap: Map<string, PrescriptionItemWithRx>,
+) => {
+  const allocations = await allocateFefo(
+    tx,
+    item.productId,
+    item.quantity,
+    item.locationId,
+  );
+
+  const saleItem = await tx.saleItem.create({
+    data: {
+      saleId,
+      productId: item.productId,
+      prescriptionItemId: item.prescriptionItemId ?? null,
+      quantity: item.quantity,
+      unitPrice: item.unitPrice,
+      discountAmount: item.discountAmount,
+      netAmount: item.lineNet,
+      taxAmount: item.lineTax,
+      totalAmount: item.lineTotal,
+    },
+  });
+
+  const batchTotals = new Map<string, number>();
+
+  for (const allocation of allocations) {
+    const stockBeforeAgg = item.product.isControlled
+      ? await tx.inventoryStock.aggregate({
+          where: { batchId: allocation.batchId },
+          _sum: { quantity: true },
+        })
+      : null;
+    const balanceBefore = Number(stockBeforeAgg?._sum.quantity ?? 0);
+
+    const updatedStock = await tx.inventoryStock.updateMany({
+      where: {
+        batchId: allocation.batchId,
+        locationId: allocation.locationId,
+        quantity: {
+          gte: allocation.quantity + allocation.reservedQuantity,
+        },
+      },
+      data: {
+        quantity: { decrement: allocation.quantity },
+      },
+    });
+
+    if (updatedStock.count === 0) {
+      throw new ApiError(
+        409,
+        "Conflicto de concurrencia: el stock del lote fue consumido por otra transacción simultánea.",
+      );
+    }
+
+    const postStock = await tx.inventoryStock.findUnique({
+      where: {
+        batchId_locationId: {
+          batchId: allocation.batchId,
+          locationId: allocation.locationId,
+        },
+      },
+    });
+
+    if (!postStock || postStock.quantity - postStock.reservedQuantity < 0) {
+      throw new ApiError(
+        409,
+        "Stock disponible insuficiente considerando unidades reservadas.",
+      );
+    }
+
+    await tx.inventoryMovement.create({
+      data: {
+        type: "SALE",
+        productId: item.productId,
+        batchId: allocation.batchId,
+        originLocationId: allocation.locationId,
+        quantity: allocation.quantity,
+        unitCost: allocation.unitCost,
+        referenceType: "SALE",
+        referenceId: saleId,
+        reason: `Venta ${saleCode}`,
+        userId: sellerId,
+      },
+    });
+
+    if (item.product.isControlled && item.prescriptionItemId) {
+      const rxItem = prescriptionItemMap.get(item.prescriptionItemId);
+      const stockAfterAgg = await tx.inventoryStock.aggregate({
+        where: { batchId: allocation.batchId },
+        _sum: { quantity: true },
+      });
+      const balanceAfter = Number(stockAfterAgg._sum.quantity ?? 0);
+
+      if (rxItem) {
+        await tx.controlledDrugRecord.create({
+          data: {
+            recordNumber: `CTRL-${crypto.randomUUID()}`,
+            movementType: "DISPENSATION",
+            productId: item.product.id,
+            batchId: allocation.batchId,
+            prescriptionId: rxItem.prescriptionId,
+            saleId,
+            patientId: rxItem.prescription.patientId,
+            doctorId: rxItem.prescription.doctorId,
+            quantity: allocation.quantity,
+            balanceBefore,
+            balanceAfter,
+            prescriptionFolio: rxItem.prescription.folio,
+            userId: sellerId,
+          },
+        });
+      }
+    }
+
+    batchTotals.set(
+      allocation.batchId,
+      (batchTotals.get(allocation.batchId) ?? 0) + allocation.quantity,
+    );
+  }
+
+  for (const [batchId, quantity] of batchTotals.entries()) {
+    await tx.saleItemBatch.create({
+      data: {
+        saleItemId: saleItem.id,
+        batchId,
+        quantity,
+      },
+    });
+  }
+};
+
 export const listSales = async (query: SalesQuery) => {
   const { page, limit, search, status, sellerId, patientId, cashSessionId, from, to } =
     query;
@@ -164,18 +485,7 @@ export const getSale = async (id: string) => {
 };
 
 export const checkout = async (sellerId: string, input: CheckoutInput) => {
-  if (
-    input.taxDocumentType === "INVOICE" &&
-    (!input.customerRut ||
-      !input.customerBusinessName ||
-      !input.customerBusinessActivity ||
-      !input.customerAddress)
-  ) {
-    throw new ApiError(
-      400,
-      "Para factura se requieren RUT, razón social, giro y dirección",
-    );
-  }
+  validateInvoiceRequirements(input);
 
   return prisma.$transaction(async (tx) => {
     const session = await tx.cashSession.findUnique({
@@ -184,6 +494,13 @@ export const checkout = async (sellerId: string, input: CheckoutInput) => {
 
     if (!session || session.status !== "OPEN") {
       throw new ApiError(409, "Debe existir una sesión de caja abierta");
+    }
+
+    if (session.openedById && session.openedById !== sellerId) {
+      throw new ApiError(
+        403,
+        "No puedes registrar ventas en una sesión de caja abierta por otro usuario",
+      );
     }
 
     if (input.patientId) {
@@ -229,143 +546,19 @@ export const checkout = async (sellerId: string, input: CheckoutInput) => {
       prescriptionItemsList.map((rxItem) => [rxItem.id, rxItem]),
     );
 
-    type PreparedSaleItem = {
-      productId: string;
-      quantity: number;
-      discountAmount: number;
-      prescriptionItemId?: string | null;
-      locationId?: string | null;
-      product: {
-        id: string;
-        name: string;
-        salePrice: unknown;
-        requiresPrescription: boolean;
-        isControlled: boolean;
-      };
-      unitPrice: number;
-      lineGross: number;
-      lineNet: number;
-      lineTax: number;
-      lineTotal: number;
-    };
-
-    const preparedItems: PreparedSaleItem[] = [];
-
-    let subtotal = 0;
-    let discountAmount = 0;
-    let totalAmount = 0;
-    let exactNetSum = 0;
-    let exactTaxSum = 0;
-    const divisor = 1 + input.taxRate / 100;
-
-    for (const item of input.items) {
-      const product = productMap.get(item.productId)!;
-
-      if (
-        (product.requiresPrescription || product.isControlled) &&
-        !item.prescriptionItemId
-      ) {
-        throw new ApiError(
-          400,
-          `${product.name} requiere una receta válida`,
-        );
-      }
-
-      if (item.prescriptionItemId) {
-        const prescriptionItem = prescriptionItemMap.get(item.prescriptionItemId);
-
-        if (!prescriptionItem || prescriptionItem.productId !== product.id) {
-          throw new ApiError(400, "El ítem de receta no corresponde al producto");
-        }
-
-        if (
-          !input.patientId ||
-          input.patientId !== prescriptionItem.prescription.patientId
-        ) {
-          throw new ApiError(
-            400,
-            "La receta médica no pertenece al paciente de la venta",
-          );
-        }
-
-        if (
-          prescriptionItem.prescription.status !== "ACTIVE" &&
-          prescriptionItem.prescription.status !== "PARTIALLY_DISPENSED"
-        ) {
-          throw new ApiError(
-            409,
-            "La receta no se encuentra disponible para dispensación",
-          );
-        }
-
-        if (
-          prescriptionItem.prescription.expirationDate &&
-          prescriptionItem.prescription.expirationDate <= new Date()
-        ) {
-          throw new ApiError(409, "La receta está vencida");
-        }
-
-        const totalRequested =
-          requestedByPrescriptionItem.get(item.prescriptionItemId) ?? item.quantity;
-
-        if (prescriptionItem.remainingQuantity < totalRequested) {
-          throw new ApiError(409, "La receta no tiene saldo suficiente");
-        }
-      }
-
-      const unitPrice = asNumber(product.salePrice);
-      const lineGross = roundMoney(unitPrice * item.quantity);
-
-      if (item.discountAmount > lineGross) {
-        throw new ApiError(
-          400,
-          `El descuento de ${product.name} supera el total de la línea`,
-        );
-      }
-
-      const lineTotal = roundMoney(lineGross - item.discountAmount);
-      const exactLineNet = lineTotal / divisor;
-      const exactLineTax = lineTotal - exactLineNet;
-      const lineNet = roundMoney(exactLineNet);
-      const lineTax = roundMoney(lineTotal - lineNet);
-
-      subtotal += lineGross;
-      discountAmount += item.discountAmount;
-      totalAmount += lineTotal;
-      exactNetSum += exactLineNet;
-      exactTaxSum += exactLineTax;
-
-      preparedItems.push({
-        ...item,
-        product,
-        unitPrice,
-        lineGross,
-        lineNet,
-        lineTax,
-        lineTotal,
-      });
-    }
-
-    subtotal = roundMoney(subtotal);
-    discountAmount = roundMoney(discountAmount);
-    totalAmount = roundMoney(totalAmount);
-
-    const netAmount = roundMoney(exactNetSum);
-    const taxAmount =
-      netAmount + roundMoney(exactTaxSum) === totalAmount
-        ? roundMoney(exactTaxSum)
-        : roundMoney(totalAmount - netAmount);
-
-    const paymentsTotal = roundMoney(
-      input.payments.reduce((sum, payment) => sum + payment.amount, 0),
+    const {
+      preparedItems,
+      subtotal,
+      discountAmount,
+      netAmount,
+      taxAmount,
+      totalAmount,
+    } = prepareCheckoutTotalsAndItems(
+      input,
+      productMap,
+      prescriptionItemMap,
+      requestedByPrescriptionItem,
     );
-
-    if (paymentsTotal !== totalAmount) {
-      throw new ApiError(
-        400,
-        `Los pagos (${paymentsTotal}) deben coincidir con el total de la venta (${totalAmount})`,
-      );
-    }
 
     const sale = await tx.sale.create({
       data: {
@@ -390,133 +583,14 @@ export const checkout = async (sellerId: string, input: CheckoutInput) => {
     });
 
     for (const item of preparedItems) {
-      const allocations = await allocateFefo(
+      await processSaleItemStockAndControlled(
         tx,
-        item.productId,
-        item.quantity,
-        item.locationId,
+        sale.id,
+        input.code,
+        sellerId,
+        item,
+        prescriptionItemMap,
       );
-
-      const saleItem = await tx.saleItem.create({
-        data: {
-          saleId: sale.id,
-          productId: item.productId,
-          prescriptionItemId: item.prescriptionItemId ?? null,
-          quantity: item.quantity,
-          unitPrice: item.unitPrice,
-          discountAmount: item.discountAmount,
-          netAmount: item.lineNet,
-          taxAmount: item.lineTax,
-          totalAmount: item.lineTotal,
-        },
-      });
-
-      const batchTotals = new Map<string, number>();
-
-      for (const allocation of allocations) {
-        const stockBeforeAgg = item.product.isControlled
-          ? await tx.inventoryStock.aggregate({
-              where: { batchId: allocation.batchId },
-              _sum: { quantity: true },
-            })
-          : null;
-        const balanceBefore = Number(stockBeforeAgg?._sum.quantity ?? 0);
-
-        const updatedStock = await tx.inventoryStock.updateMany({
-          where: {
-            batchId: allocation.batchId,
-            locationId: allocation.locationId,
-            quantity: {
-              gte: allocation.quantity + allocation.reservedQuantity,
-            },
-          },
-          data: {
-            quantity: { decrement: allocation.quantity },
-          },
-        });
-
-        if (updatedStock.count === 0) {
-          throw new ApiError(
-            409,
-            "Conflicto de concurrencia: el stock del lote fue consumido por otra transacción simultánea.",
-          );
-        }
-
-        const postStock = await tx.inventoryStock.findUnique({
-          where: {
-            batchId_locationId: {
-              batchId: allocation.batchId,
-              locationId: allocation.locationId,
-            },
-          },
-        });
-
-        if (!postStock || postStock.quantity - postStock.reservedQuantity < 0) {
-          throw new ApiError(
-            409,
-            "Stock disponible insuficiente considerando unidades reservadas.",
-          );
-        }
-
-        await tx.inventoryMovement.create({
-          data: {
-            type: "SALE",
-            productId: item.productId,
-            batchId: allocation.batchId,
-            originLocationId: allocation.locationId,
-            quantity: allocation.quantity,
-            unitCost: allocation.unitCost,
-            referenceType: "SALE",
-            referenceId: sale.id,
-            reason: `Venta ${input.code}`,
-            userId: sellerId,
-          },
-        });
-
-        if (item.product.isControlled && item.prescriptionItemId) {
-          const rxItem = prescriptionItemMap.get(item.prescriptionItemId);
-          const stockAfterAgg = await tx.inventoryStock.aggregate({
-            where: { batchId: allocation.batchId },
-            _sum: { quantity: true },
-          });
-          const balanceAfter = Number(stockAfterAgg._sum.quantity ?? 0);
-
-          if (rxItem) {
-            await tx.controlledDrugRecord.create({
-              data: {
-                recordNumber: `CTRL-${crypto.randomUUID()}`,
-                movementType: "DISPENSATION",
-                productId: item.product.id,
-                batchId: allocation.batchId,
-                prescriptionId: rxItem.prescriptionId,
-                saleId: sale.id,
-                patientId: rxItem.prescription.patientId,
-                doctorId: rxItem.prescription.doctorId,
-                quantity: allocation.quantity,
-                balanceBefore,
-                balanceAfter,
-                prescriptionFolio: rxItem.prescription.folio,
-                userId: sellerId,
-              },
-            });
-          }
-        }
-
-        batchTotals.set(
-          allocation.batchId,
-          (batchTotals.get(allocation.batchId) ?? 0) + allocation.quantity,
-        );
-      }
-
-      for (const [batchId, quantity] of batchTotals.entries()) {
-        await tx.saleItemBatch.create({
-          data: {
-            saleItemId: saleItem.id,
-            batchId,
-            quantity,
-          },
-        });
-      }
     }
 
     const updatedPrescriptionIds = new Set<string>();
@@ -572,7 +646,7 @@ export const checkout = async (sellerId: string, input: CheckoutInput) => {
         data: {
           saleId: sale.id,
           method: payment.method,
-          amount: payment.amount,
+          amount: roundMoney(payment.amount),
           referenceCode: payment.referenceCode ?? null,
         },
       });
@@ -581,7 +655,7 @@ export const checkout = async (sellerId: string, input: CheckoutInput) => {
     const cashPaid = roundMoney(
       input.payments
         .filter((payment) => payment.method === "CASH")
-        .reduce((sum, payment) => sum + payment.amount, 0),
+        .reduce((sum, payment) => sum + roundMoney(payment.amount), 0),
     );
 
     if (cashPaid > 0) {
@@ -651,7 +725,7 @@ export const cancelSale = async (
     );
 
     if (cashPaid > 0) {
-      if (!sale.cashSession || sale.cashSession.status === "CLOSED" || sale.cashSession.status !== "OPEN") {
+      if (!sale.cashSession || sale.cashSession.status !== "OPEN") {
         throw new ApiError(
           409,
           "No se puede anular una venta con pago en efectivo porque la sesión de caja asociada está cerrada",
@@ -783,22 +857,36 @@ export const cancelSale = async (
       ),
     ];
 
+    const now = new Date();
     for (const prescriptionId of prescriptionIds) {
-      const items = await tx.prescriptionItem.findMany({
-        where: { prescriptionId },
-      });
+      const [prescription, items] = await Promise.all([
+        typeof tx.prescription.findUnique === "function"
+          ? tx.prescription.findUnique({ where: { id: prescriptionId } })
+          : Promise.resolve(null),
+        tx.prescriptionItem.findMany({
+          where: { prescriptionId },
+        }),
+      ]);
 
+      if (prescription?.status === "CANCELLED") {
+        continue;
+      }
+
+      const isExpired =
+        prescription?.expirationDate && prescription.expirationDate <= now;
       const allDispensed = items.every((item) => item.remainingQuantity <= 0);
       const anyDispensed = items.some((item) => item.dispensedQuantity > 0);
 
       await tx.prescription.update({
         where: { id: prescriptionId },
         data: {
-          status: allDispensed
-            ? "DISPENSED"
-            : anyDispensed
-              ? "PARTIALLY_DISPENSED"
-              : "ACTIVE",
+          status: isExpired
+            ? "EXPIRED"
+            : allDispensed
+              ? "DISPENSED"
+              : anyDispensed
+                ? "PARTIALLY_DISPENSED"
+                : "ACTIVE",
         },
       });
     }
@@ -812,6 +900,19 @@ export const cancelSale = async (
           description: `Anulación venta ${sale.code}: ${input.reason}`,
           saleId,
           userId,
+        },
+      });
+    }
+
+    if (
+      sale.coverages?.length &&
+      typeof tx.saleCoverage?.updateMany === "function"
+    ) {
+      await tx.saleCoverage.updateMany({
+        where: { saleId, status: "APPLIED" },
+        data: {
+          status: "CANCELLED",
+          responseMessage: `Cobertura anulada por cancelación de venta: ${input.reason}`,
         },
       });
     }
@@ -851,6 +952,12 @@ export const issueTaxDocumentMock = async (
   }
   if (sale.taxDocument.status === "CANCELLED") {
     throw new ApiError(409, "El documento está anulado");
+  }
+  if (
+    sale.taxDocument.status === "ISSUED" ||
+    sale.taxDocument.status === "ACCEPTED"
+  ) {
+    throw new ApiError(409, "El documento tributario ya fue emitido");
   }
 
   const folio =

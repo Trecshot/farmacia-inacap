@@ -2,39 +2,29 @@ import type { RequestHandler } from "express";
 
 import { prisma } from "../config/prisma.js";
 import { ApiError } from "../utils/ApiError.js";
+import { ACCESS_COOKIE_NAME, getCookie } from "../utils/cookies.js";
+import { authSessionUserSelect } from "../utils/selects.js";
 import { verifyAccessToken } from "../utils/token.js";
 
 export const authenticate: RequestHandler = async (req, _res, next) => {
   const header = req.headers.authorization;
+  const bearerToken = header?.startsWith("Bearer ")
+    ? header.slice(7).trim()
+    : null;
+  const cookieToken = getCookie(req, ACCESS_COOKIE_NAME);
+  const token = bearerToken || cookieToken;
 
-  if (!header?.startsWith("Bearer ")) {
+  if (!token) {
     next(new ApiError(401, "Token de acceso requerido"));
     return;
   }
-
-  const token = header.slice(7);
 
   try {
     const decoded = verifyAccessToken(token);
 
     const user = await prisma.user.findUnique({
       where: { id: decoded.sub },
-      include: {
-        role: {
-          include: {
-            permissions: {
-              where: {
-                permission: {
-                  isActive: true,
-                },
-              },
-              include: {
-                permission: true,
-              },
-            },
-          },
-        },
-      },
+      select: authSessionUserSelect,
     });
 
     if (!user) {

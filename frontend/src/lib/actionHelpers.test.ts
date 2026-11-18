@@ -4,21 +4,56 @@ import {
   nullable,
   numeric,
   optionalDate,
+  optionalNumeric,
   runApiAction,
 } from "./actionHelpers";
-import { getApiErrorMessage } from "./api";
+import { getAccessToken, getApiErrorMessage, setAccessToken } from "./api";
+import {
+  generateOperationCode,
+  getLocalIsoDate,
+  normalizeText,
+} from "./formatters";
 
-describe("Action Helpers & API Error Normalization (src/lib/actionHelpers.ts & src/lib/api.ts)", () => {
-  it("normaliza valores de formulario con nullable, numeric y optionalDate", () => {
+describe("Action Helpers, Formatters & API Session Utilities", () => {
+  it("normaliza valores de formulario con nullable, numeric, optionalNumeric y optionalDate", () => {
     expect(nullable("  Hola  ")).toBe("Hola");
     expect(nullable("   ")).toBeNull();
     expect(nullable(null)).toBeNull();
 
     expect(numeric("1500", 0)).toBe(1500);
     expect(numeric("invalido", 42)).toBe(42);
+    expect(numeric("", 1)).toBe(1);
+    expect(numeric("   ", 5)).toBe(5);
+    expect(numeric(undefined, 7)).toBe(7);
+
+    expect(optionalNumeric("")).toBeNull();
+    expect(optionalNumeric(undefined)).toBeNull();
+    expect(optionalNumeric(null)).toBeNull();
+    expect(optionalNumeric("2500")).toBe(2500);
 
     expect(optionalDate(" 2026-12-31 ")).toBe("2026-12-31");
     expect(optionalDate("")).toBeNull();
+  });
+
+  it("normaliza texto sin tildes, genera fechas ISO en hora local y códigos únicos sin colisión", () => {
+    expect(normalizeText("  Ácido Clavulánico 500mg ")).toBe(
+      "acido clavulanico 500mg",
+    );
+
+    const localDate = getLocalIsoDate(new Date(2026, 10, 18, 23, 30, 0));
+    expect(localDate).toBe("2026-11-18");
+
+    const code1 = generateOperationCode("VTA");
+    const code2 = generateOperationCode("VTA");
+    expect(code1.startsWith("VTA-")).toBe(true);
+    expect(code1).not.toBe(code2);
+  });
+
+  it("mantiene el accessToken únicamente en memoria volátil sin escribir en localStorage", () => {
+    setAccessToken("jwt-in-memory-token");
+    expect(getAccessToken()).toBe("jwt-in-memory-token");
+    setAccessToken(null);
+    expect(getAccessToken()).toBeNull();
   });
 
   it("normaliza errores de Axios y de red provenientes de src/lib/api.ts", () => {

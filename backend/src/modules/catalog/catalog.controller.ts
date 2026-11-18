@@ -1,4 +1,5 @@
 import type { Request, Response } from "express";
+import { getRouteParam } from "../../utils/routeParam.js";
 import {
   basicCatalogCreateSchema,
   basicCatalogUpdateSchema,
@@ -8,17 +9,6 @@ import {
   productsQuerySchema,
 } from "./catalog.schemas.js";
 import * as service from "./catalog.service.js";
-import { ApiError } from "../../utils/ApiError.js";
-
-const getIdParam = (req: Request) => {
-  const id = req.params.id;
-
-  if (!id || Array.isArray(id)) {
-    throw new ApiError(400, "ID inválido");
-  }
-
-  return id;
-};
 
 const kindFromPath = (req: Request) => {
   const base = req.baseUrl;
@@ -51,7 +41,7 @@ export const getBasicController = async (
   req: Request,
   res: Response,
 ) => {
-  const id = getIdParam(req);
+  const id = getRouteParam(req, "id");
 
   res.json({
     ok: true,
@@ -79,7 +69,7 @@ export const updateBasicController = async (
   req: Request,
   res: Response,
 ) => {
-  const id = getIdParam(req);
+  const id = getRouteParam(req, "id");
 
   res.json({
     ok: true,
@@ -95,7 +85,7 @@ export const deleteBasicController = async (
   req: Request,
   res: Response,
 ) => {
-  const id = getIdParam(req);
+  const id = getRouteParam(req, "id");
 
   res.json({
     ok: true,
@@ -122,7 +112,7 @@ export const getProductController = async (
   req: Request,
   res: Response,
 ) => {
-  const id = getIdParam(req);
+  const id = getRouteParam(req, "id");
 
   res.json({
     ok: true,
@@ -146,7 +136,7 @@ export const updateProductController = async (
   req: Request,
   res: Response,
 ) => {
-  const id = getIdParam(req);
+  const id = getRouteParam(req, "id");
 
   res.json({
     ok: true,
@@ -161,7 +151,7 @@ export const deleteProductController = async (
   req: Request,
   res: Response,
 ) => {
-  const id = getIdParam(req);
+  const id = getRouteParam(req, "id");
 
   res.json({
     ok: true,

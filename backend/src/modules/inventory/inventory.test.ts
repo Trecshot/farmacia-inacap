@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ApiError } from "../../utils/ApiError.js";
 
 const mockTx = {
   purchaseOrder: {
@@ -7,6 +8,7 @@ const mockTx = {
   },
   inventoryLocation: {
     findUnique: vi.fn(),
+    findMany: vi.fn(),
   },
   purchaseReceipt: {
     create: vi.fn(),
@@ -17,8 +19,10 @@ const mockTx = {
     create: vi.fn(),
   },
   inventoryStock: {
+    findUnique: vi.fn(),
     aggregate: vi.fn(),
     upsert: vi.fn(),
+    updateMany: vi.fn(),
   },
   inventoryMovement: {
     create: vi.fn(),
@@ -28,6 +32,7 @@ const mockTx = {
   },
   purchaseOrderDetail: {
     update: vi.fn(),
+    updateMany: vi.fn(),
     findMany: vi.fn(),
   },
 };
@@ -45,6 +50,7 @@ const mockPrisma = {
     findMany: vi.fn(),
   },
   alert: {
+    findMany: vi.fn(),
     findFirst: vi.fn(),
     create: vi.fn(),
     update: vi.fn(),
@@ -56,8 +62,12 @@ vi.mock("../../config/prisma.js", () => ({
   prisma: mockPrisma,
 }));
 
-const { getFefoAllocation, scanAlerts } = await import("./inventory.service.js");
-const { receivePurchaseOrder } = await import("../purchases/purchases.service.js");
+const { adjustStock, getFefoAllocation, scanAlerts } = await import(
+  "./inventory.service.js"
+);
+const { receivePurchaseOrder } = await import(
+  "../purchases/purchases.service.js"
+);
 
 describe("Inventory & Purchases Integration (src/modules/inventory/inventory.service.ts)", () => {
   beforeEach(() => {
@@ -89,10 +99,12 @@ describe("Inventory & Purchases Integration (src/modules/inventory/inventory.ser
       ],
     });
 
-    mockTx.inventoryLocation.findUnique.mockResolvedValue({
-      id: "loc-bodega",
-      isActive: true,
-    });
+    mockTx.inventoryLocation.findMany.mockResolvedValue([
+      {
+        id: "loc-bodega",
+        isActive: true,
+      },
+    ]);
     mockTx.purchaseReceipt.create.mockResolvedValue({
       id: "rec-1",
       code: "REC-01",
@@ -104,6 +116,7 @@ describe("Inventory & Purchases Integration (src/modules/inventory/inventory.ser
       productId: "prod-1",
       expirationDate: futureExp,
     });
+    mockTx.purchaseOrderDetail.updateMany.mockResolvedValue({ count: 1 });
     mockTx.purchaseOrderDetail.findMany.mockResolvedValue([
       {
         id: "pod-1",
@@ -216,8 +229,9 @@ describe("Inventory & Purchases Integration (src/modules/inventory/inventory.ser
     ]);
   });
 
-  it("genera alertas de vencimiento próximo (EXPIRING_SOON) y lotes vencidos (EXPIRED)", async () => {
+  it("genera alertas de vencimiento próximo (EXPIRING_SOON) y lotes vencidos (EXPIRED) sin N+1", async () => {
     mockPrisma.product.findMany.mockResolvedValue([]);
+    mockPrisma.alert.findMany.mockResolvedValue([]);
     const soonDate = new Date(Date.now() + 10 * 86400000);
     const expiredDate = new Date(Date.now() - 2 * 86400000);
 
@@ -238,12 +252,12 @@ describe("Inventory & Purchases Integration (src/modules/inventory/inventory.ser
       },
     ]);
 
-    mockPrisma.alert.findFirst.mockResolvedValue(null);
     mockPrisma.alert.create.mockResolvedValue({ id: "alert-1" });
 
     const scanResult = await scanAlerts({ expiringDays: 30 });
 
     expect(scanResult.createdOrUpdated).toBe(2);
+    expect(mockPrisma.alert.findFirst).not.toHaveBeenCalled();
     expect(mockPrisma.alert.create).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({
@@ -261,6 +275,38 @@ describe("Inventory & Purchases Integration (src/modules/inventory/inventory.ser
           batchId: "batch-expired",
         }),
       }),
+    );
+  });
+
+  it("ejecuta ajuste negativo de stock de forma atómica con updateMany y bloquea conflictos de concurrencia", async () => {
+    mockTx.batch.findUnique.mockResolvedValue({
+      id: "batch-1",
+      productId: "prod-1",
+    });
+    mockTx.inventoryLocation.findUnique.mockResolvedValue({
+      id: "loc-1",
+      isActive: true,
+    });
+    mockTx.inventoryStock.findUnique.mockResolvedValue({
+      batchId: "batch-1",
+      locationId: "loc-1",
+      quantity: 10,
+      reservedQuantity: 2,
+    });
+    mockTx.inventoryStock.updateMany.mockResolvedValue({ count: 0 });
+
+    await expect(
+      adjustStock("user-1", {
+        batchId: "batch-1",
+        locationId: "loc-1",
+        quantityDelta: -5,
+        reason: "Merma por rotura",
+      }),
+    ).rejects.toThrowError(
+      new ApiError(
+        409,
+        "Conflicto de concurrencia: stock insuficiente o reservado para aplicar el ajuste",
+      ),
     );
   });
 });

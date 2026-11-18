@@ -42,3 +42,30 @@ export const requirePermission = (...permissions: string[]): RequestHandler => {
     next();
   };
 };
+
+export const requireAnyPermission = (
+  ...permissions: string[]
+): RequestHandler => {
+  return (req, _res, next) => {
+    if (!req.auth) {
+      next(new ApiError(401, "Autenticación requerida"));
+      return;
+    }
+
+    if (req.auth.role === "ADMIN") {
+      next();
+      return;
+    }
+
+    const hasAnyPermission = permissions.some((permission) =>
+      req.auth!.permissions.includes(permission),
+    );
+
+    if (!hasAnyPermission) {
+      next(new ApiError(403, "No tienes permisos para realizar esta acción"));
+      return;
+    }
+
+    next();
+  };
+};

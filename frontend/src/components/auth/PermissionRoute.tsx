@@ -1,12 +1,19 @@
 import { Navigate, Outlet } from "react-router-dom";
 import { useAuth } from "../../context/AuthContext";
-import { getDefaultAuthenticatedPath } from "../../lib/access";
 
-export const PermissionRoute = ({ permission }: { permission: string }) => {
-  const { hasPermission, user } = useAuth();
+export const PermissionRoute = ({
+  permission,
+}: {
+  permission: string | string[];
+}) => {
+  const { hasPermission } = useAuth();
 
-  if (!hasPermission(permission)) {
-    return <Navigate to={getDefaultAuthenticatedPath(user)} replace />;
+  const allowed = Array.isArray(permission)
+    ? permission.some((perm) => hasPermission(perm))
+    : hasPermission(permission);
+
+  if (!allowed) {
+    return <Navigate to="/403" replace />;
   }
 
   return <Outlet />;

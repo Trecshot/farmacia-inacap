@@ -7,14 +7,20 @@ import {
   type ControlledProduct,
   type ControlledRecordRow,
 } from "../components/clinical/ControlledSubstanceLedger";
-import { ActionModal, type ActionField } from "../components/ui/ActionModal";
 import { PageLoader } from "../components/feedback/PageLoader";
+import { ActionModal, type ActionField } from "../components/ui/ActionModal";
 import { PageHeader } from "../components/ui/PageHeader";
 import { useAuth } from "../context/AuthContext";
 import { useResource } from "../hooks/useResource";
+import {
+  nullable,
+  numeric,
+  optionalNumeric,
+  runApiAction,
+} from "../lib/actionHelpers";
 import { api } from "../lib/api";
-import { nullable, numeric, runApiAction } from "../lib/actionHelpers";
 import { translateChoiceLabel } from "../lib/choiceLabels";
+import { normalizeText } from "../lib/formatters";
 
 type Doctor = {
   id: string;
@@ -25,9 +31,6 @@ type Doctor = {
 };
 type FormValues = Record<string, string | number | boolean>;
 
-const norm = (v: string) =>
-  v.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
-
 const defaultControlledInitialValues = {
   movementType: "ADJUSTMENT_IN",
   quantity: 1,
@@ -36,12 +39,17 @@ const defaultControlledInitialValues = {
 export const ControlledPage = () => {
   const { hasPermission } = useAuth();
   const canManage = hasPermission("controlled.manage");
+  const canReadProducts = hasPermission("products.read");
+  const canReadInventory = hasPermission("inventory.read");
+  const canReadPatients = hasPermission("patients.read");
+  const canReadDoctors =
+    hasPermission("doctors.read") || hasPermission("prescriptions.read");
 
   const [q, setQ] = useState("");
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState("");
-  const [todayIso] = useState(() => new Date().toISOString());
+  const [nowTime] = useState(() => Date.now());
 
   const recSel = useCallback(
     (p: { items: ControlledRecordRow[] }) => p.items,
@@ -68,18 +76,24 @@ export const ControlledPage = () => {
   const prodRes = useResource<
     ControlledProduct[],
     { items: ControlledProduct[] }
-  >("/products?limit=100&isControlled=true", prodSel);
+  >("/products?limit=100&isControlled=true", prodSel, {
+    enabled: canManage && canReadProducts,
+  });
   const batchRes = useResource<ControlledBatch[], { items: ControlledBatch[] }>(
     "/inventory/batches?limit=100",
     batchSel,
+    { enabled: canManage && canReadInventory },
   );
   const patientRes = useResource<
     ControlledPatient[],
     { items: ControlledPatient[] }
-  >("/patients?limit=100", patientSel);
+  >("/patients?limit=100", patientSel, {
+    enabled: canManage && canReadPatients,
+  });
   const doctorRes = useResource<Doctor[], { items: Doctor[] }>(
     "/doctors?limit=100",
     doctorSel,
+    { enabled: canManage && canReadDoctors },
   );
 
   const rows = useMemo(() => recRes.data ?? [], [recRes.data]);
@@ -96,10 +110,10 @@ export const ControlledPage = () => {
         (b) =>
           !b.isBlocked &&
           (!b.expirationDate ||
-            new Date(b.expirationDate).toISOString() > todayIso) &&
+            new Date(b.expirationDate).getTime() > nowTime) &&
           (b.product?.isActive ?? true),
       ),
-    [batchRes.data, todayIso],
+    [batchRes.data, nowTime],
   );
   const patients = useMemo(
     () => (patientRes.data ?? []).filter((p) => p.isActive !== false),
@@ -115,7 +129,7 @@ export const ControlledPage = () => {
       rows.filter(
         (r) =>
           !q ||
-          norm(
+          normalizeText(
             [
               r.recordNumber,
               r.product?.name ?? "",
@@ -123,7 +137,7 @@ export const ControlledPage = () => {
               r.batch?.batchNumber ?? "",
               r.patient?.rut ?? "",
             ].join(" "),
-          ).includes(norm(q)),
+          ).includes(normalizeText(q)),
       ),
     [rows, q],
   );
@@ -203,6 +217,9 @@ export const ControlledPage = () => {
   };
 
   const save = async (v: FormValues) => {
+    const balanceBefore = optionalNumeric(v.balanceBefore);
+    const balanceAfter = optionalNumeric(v.balanceAfter);
+
     const payload: Record<string, unknown> = {
       recordNumber: String(v.recordNumber),
       movementType: String(v.movementType),
@@ -210,17 +227,14 @@ export const ControlledPage = () => {
       batchId: nullable(v.batchId),
       patientId: nullable(v.patientId),
       doctorId: nullable(v.doctorId),
-      quantity: numeric(v.quantity),
+      quantity: numeric(v.quantity, 1),
       prescriptionFolio: nullable(v.prescriptionFolio),
       ispReference: nullable(v.ispReference),
       reason: nullable(v.reason),
+      ...(balanceBefore !== null ? { balanceBefore } : {}),
+      ...(balanceAfter !== null ? { balanceAfter } : {}),
     };
-    if (v.balanceBefore !== "") {
-      payload.balanceBefore = numeric(v.balanceBefore);
-    }
-    if (v.balanceAfter !== "") {
-      payload.balanceAfter = numeric(v.balanceAfter);
-    }
+
     await runApiAction(
       () => api.post("/controlled-drugs", payload),
       setBusy,

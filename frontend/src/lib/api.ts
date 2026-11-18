@@ -1,88 +1,115 @@
-import axios from "axios";
+import axios, { AxiosHeaders, type InternalAxiosRequestConfig } from "axios";
 
 const configuredApiUrl = import.meta.env.VITE_API_URL?.trim();
 
 export const API_URL =
   configuredApiUrl ||
   (import.meta.env.PROD
-    ? "http://farmagestion-backend-env-3.eba-2mi4erfp.us-east-1.elasticbeanstalk.com/api"
+    ? "/api"
     : "http://localhost:3000/api");
+
+let inMemoryAccessToken: string | null = null;
+let unauthorizedHandler: (() => void) | null = null;
+let refreshPromise: Promise<string | null> | null = null;
+
+export const setAccessToken = (token: string | null) => {
+  inMemoryAccessToken = token;
+};
+
+export const getAccessToken = (): string | null => inMemoryAccessToken;
+
+export const setUnauthorizedHandler = (handler: (() => void) | null) => {
+  unauthorizedHandler = handler;
+};
 
 export const api = axios.create({
   baseURL: API_URL,
   timeout: 15000,
+  withCredentials: true,
   headers: {
     "Content-Type": "application/json",
   },
 });
 
-api.interceptors.request.use((config) => {
-  const token = localStorage.getItem("farmacia_access_token");
+const applyAuthHeader = (
+  config: InternalAxiosRequestConfig,
+  token: string,
+) => {
+  if (config.headers instanceof AxiosHeaders) {
+    config.headers.set("Authorization", `Bearer ${token}`);
+  } else {
+    config.headers = AxiosHeaders.from(config.headers);
+    config.headers.set("Authorization", `Bearer ${token}`);
+  }
+};
 
-  if (token) {
-    config.headers.Authorization = `Bearer ${token}`;
+api.interceptors.request.use((config) => {
+  if (inMemoryAccessToken) {
+    applyAuthHeader(config, inMemoryAccessToken);
   }
 
   return config;
 });
 
+const executeSingleFlightRefresh = (): Promise<string | null> => {
+  if (!refreshPromise) {
+    refreshPromise = axios
+      .post<{
+        accessToken: string;
+      }>(
+        `${API_URL}/auth/refresh`,
+        {},
+        {
+          withCredentials: true,
+          headers: {
+            "Content-Type": "application/json",
+          },
+          timeout: 15000,
+        },
+      )
+      .then(({ data }) => {
+        const nextAccessToken = data.accessToken ?? null;
+        setAccessToken(nextAccessToken);
+        return nextAccessToken;
+      })
+      .finally(() => {
+        refreshPromise = null;
+      });
+  }
+
+  return refreshPromise;
+};
+
 api.interceptors.response.use(
   (response) => response,
   async (error) => {
     const original = error.config as
-      | (typeof error.config & { _retry?: boolean })
+      | (InternalAxiosRequestConfig & { _retry?: boolean })
       | undefined;
+
+    const requestUrl = String(original?.url ?? "");
+    const isAuthMutation =
+      requestUrl.includes("/auth/login") ||
+      requestUrl.includes("/auth/refresh") ||
+      requestUrl.includes("/auth/logout");
 
     if (
       error.response?.status === 401 &&
       original &&
       !original._retry &&
-      !String(original.url ?? "").includes("/auth/login") &&
-      !String(original.url ?? "").includes("/auth/refresh")
+      !isAuthMutation
     ) {
-      const refreshToken = localStorage.getItem("farmacia_refresh_token");
+      original._retry = true;
 
-      if (refreshToken) {
-        original._retry = true;
-
-        try {
-          const { data } = await axios.post<{
-            accessToken: string;
-            refreshToken?: string;
-          }>(
-            `${API_URL}/auth/refresh`,
-            {
-              refreshToken,
-            },
-            {
-              headers: {
-                "Content-Type": "application/json",
-              },
-              timeout: 15000,
-            },
-          );
-
-          const accessToken = data.accessToken;
-          const nextRefreshToken = data.refreshToken;
-
-          localStorage.setItem("farmacia_access_token", accessToken);
-          if (nextRefreshToken) {
-            localStorage.setItem("farmacia_refresh_token", nextRefreshToken);
-          }
-
-          original.headers = {
-            ...(original.headers ?? {}),
-            Authorization: `Bearer ${accessToken}`,
-          };
-
-          return api(original);
-        } catch {
-          localStorage.removeItem("farmacia_access_token");
-          localStorage.removeItem("farmacia_refresh_token");
-          localStorage.removeItem("farmacia_user");
-
-          window.location.href = "/login";
+      try {
+        const accessToken = await executeSingleFlightRefresh();
+        if (accessToken) {
+          applyAuthHeader(original, accessToken);
         }
+        return api(original);
+      } catch {
+        setAccessToken(null);
+        unauthorizedHandler?.();
       }
     }
 

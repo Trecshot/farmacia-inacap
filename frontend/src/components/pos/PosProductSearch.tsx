@@ -1,4 +1,5 @@
 import { Barcode, Pill, Plus, Search } from "lucide-react";
+import { clp } from "../../lib/formatters";
 import "./pos.module.css";
 
 export type PosProduct = {
@@ -26,12 +27,6 @@ type Props = {
   onReload: () => void;
   onAddProduct: (product: PosProduct) => void;
 };
-
-const clp = new Intl.NumberFormat("es-CL", {
-  style: "currency",
-  currency: "CLP",
-  maximumFractionDigits: 0,
-});
 
 export const PosProductSearch = ({
   query,

@@ -42,9 +42,7 @@ export default function App() {
 
       <Route element={<ProtectedRoute />}>
         <Route element={<AppShell />}>
-          <Route element={<PermissionRoute permission="reports.read" />}>
-            <Route index element={<HomeRoute />} />
-          </Route>
+          <Route index element={<HomeRoute />} />
 
           <Route element={<PermissionRoute permission="sales.create" />}>
             <Route path="/pos" element={<PosPage />} />
@@ -75,8 +73,17 @@ export default function App() {
             <Route path="/patients" element={<PatientsPage />} />
           </Route>
 
-          <Route element={<PermissionRoute permission="prescriptions.read" />}>
+          <Route
+            element={
+              <PermissionRoute
+                permission={["doctors.read", "prescriptions.read"]}
+              />
+            }
+          >
             <Route path="/doctors" element={<DoctorsPage />} />
+          </Route>
+
+          <Route element={<PermissionRoute permission="prescriptions.read" />}>
             <Route path="/prescriptions" element={<PrescriptionsPage />} />
           </Route>
 

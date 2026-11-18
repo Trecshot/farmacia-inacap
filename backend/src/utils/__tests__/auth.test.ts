@@ -1,3 +1,4 @@
+import type { Request } from "express";
 import jwt from "jsonwebtoken";
 import { beforeAll, describe, expect, it } from "vitest";
 import type { JwtUserPayload } from "../../types/auth.js";
@@ -9,6 +10,8 @@ let verifyAccessToken: typeof import("../token.js").verifyAccessToken;
 let generateRefreshToken: typeof import("../token.js").generateRefreshToken;
 let hashToken: typeof import("../token.js").hashToken;
 let getRefreshExpiration: typeof import("../token.js").getRefreshExpiration;
+let getCookie: typeof import("../cookies.js").getCookie;
+let REFRESH_COOKIE_NAME: typeof import("../cookies.js").REFRESH_COOKIE_NAME;
 
 beforeAll(async () => {
   process.env.DATABASE_URL =
@@ -22,6 +25,7 @@ beforeAll(async () => {
 
   const pwdMod = await import("../password.js");
   const tokenMod = await import("../token.js");
+  const cookieMod = await import("../cookies.js");
 
   hashPassword = pwdMod.hashPassword;
   verifyPassword = pwdMod.verifyPassword;
@@ -30,9 +34,11 @@ beforeAll(async () => {
   generateRefreshToken = tokenMod.generateRefreshToken;
   hashToken = tokenMod.hashToken;
   getRefreshExpiration = tokenMod.getRefreshExpiration;
+  getCookie = cookieMod.getCookie;
+  REFRESH_COOKIE_NAME = cookieMod.REFRESH_COOKIE_NAME;
 });
 
-describe("Auth Utilities (password.ts & token.ts)", () => {
+describe("Auth Utilities (password.ts, token.ts & cookies.ts)", () => {
   it("genera hash criptográfico bcrypt y verifica contraseñas válidas e inválidas", async () => {
     const plain = "FarmaciaSegura2026!";
     const hashed = await hashPassword(plain);
@@ -93,5 +99,16 @@ describe("Auth Utilities (password.ts & token.ts)", () => {
 
     const exp = getRefreshExpiration();
     expect(exp.getTime()).toBeGreaterThan(Date.now());
+  });
+
+  it("extrae cookies HttpOnly del encabezado Cookie de forma segura", () => {
+    const mockReq = {
+      headers: {
+        cookie: `theme=light; ${REFRESH_COOKIE_NAME}=token_seguro_123%3D; other=1`,
+      },
+    } as unknown as Request;
+
+    expect(getCookie(mockReq, REFRESH_COOKIE_NAME)).toBe("token_seguro_123=");
+    expect(getCookie(mockReq, "non_existent")).toBeNull();
   });
 });

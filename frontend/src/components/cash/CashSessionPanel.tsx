@@ -1,4 +1,5 @@
 import { Banknote, Pencil, Trash2, WalletCards } from "lucide-react";
+import { clp } from "../../lib/formatters";
 import { ResponsiveTable } from "../ui/ResponsiveTable";
 import { StatusBadge } from "../ui/StatusBadge";
 
@@ -36,12 +37,6 @@ export type CashSummary = {
   sales: number;
   expected: number;
 };
-
-const clp = new Intl.NumberFormat("es-CL", {
-  style: "currency",
-  currency: "CLP",
-  maximumFractionDigits: 0,
-});
 
 type Props = {
   summary: CashSummary;

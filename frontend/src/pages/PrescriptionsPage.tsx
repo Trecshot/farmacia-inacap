@@ -13,9 +13,10 @@ import { ResponsiveTable } from "../components/ui/ResponsiveTable";
 import { StatusBadge } from "../components/ui/StatusBadge";
 import { useAuth } from "../context/AuthContext";
 import { useResource } from "../hooks/useResource";
-import { api } from "../lib/api";
 import { nullable, numeric, runApiAction } from "../lib/actionHelpers";
+import { api } from "../lib/api";
 import { translateChoiceLabel } from "../lib/choiceLabels";
+import { getLocalIsoDate, normalizeText } from "../lib/formatters";
 
 type Rx = {
   id: string;
@@ -35,20 +36,21 @@ type Rx = {
   }>;
 };
 
-const norm = (v: string) =>
-  v.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
-
 export const PrescriptionsPage = () => {
   const { hasPermission } = useAuth();
   const canCreate = hasPermission("prescriptions.create");
   const canCancel = hasPermission("prescriptions.cancel");
+  const canReadPatients = hasPermission("patients.read");
+  const canReadDoctors =
+    hasPermission("doctors.read") || hasPermission("prescriptions.read");
+  const canReadProducts = hasPermission("products.read");
 
   const [q, setQ] = useState("");
   const [modal, setModal] = useState<"create" | "cancel" | null>(null);
   const [selected, setSelected] = useState<Rx | null>(null);
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState("");
-  const [todayDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [todayDate] = useState(() => getLocalIsoDate());
 
   const rxSel = useCallback((p: { items: Rx[] }) => p.items, []);
   const patientSel = useCallback(
@@ -71,14 +73,17 @@ export const PrescriptionsPage = () => {
   const patientsRes = useResource<ClinicalPatient[], { items: ClinicalPatient[] }>(
     "/patients?limit=100",
     patientSel,
+    { enabled: canCreate && canReadPatients },
   );
   const doctorsRes = useResource<ClinicalDoctor[], { items: ClinicalDoctor[] }>(
     "/doctors?limit=100",
     doctorSel,
+    { enabled: canCreate && canReadDoctors },
   );
   const productsRes = useResource<ClinicalProduct[], { items: ClinicalProduct[] }>(
     "/products?limit=100",
     productSel,
+    { enabled: canCreate && canReadProducts },
   );
 
   const rows = useMemo(() => rxRes.data ?? [], [rxRes.data]);
@@ -91,7 +96,7 @@ export const PrescriptionsPage = () => {
       rows.filter(
         (r) =>
           !q ||
-          norm(
+          normalizeText(
             [
               r.folio,
               r.patient.rut,
@@ -100,7 +105,7 @@ export const PrescriptionsPage = () => {
               r.doctor.firstName,
               r.doctor.lastName,
             ].join(" "),
-          ).includes(norm(q)),
+          ).includes(normalizeText(q)),
       ),
     [rows, q],
   );
@@ -130,7 +135,7 @@ export const PrescriptionsPage = () => {
             items: [
               {
                 productId: String(v.productId),
-                prescribedQuantity: numeric(v.prescribedQuantity),
+                prescribedQuantity: numeric(v.prescribedQuantity, 1),
                 dosage: nullable(v.dosage),
                 frequency: nullable(v.frequency),
                 duration: nullable(v.duration),

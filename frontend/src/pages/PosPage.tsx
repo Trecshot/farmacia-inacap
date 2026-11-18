@@ -15,8 +15,10 @@ import {
   type PosProduct,
 } from "../components/pos/PosProductSearch";
 import "../components/pos/pos.module.css";
-import { api, getApiErrorMessage } from "../lib/api";
+import { useAuth } from "../context/AuthContext";
 import { nullable, numeric, runApiAction } from "../lib/actionHelpers";
+import { api, getApiErrorMessage } from "../lib/api";
+import { generateOperationCode, normalizeText } from "../lib/formatters";
 import {
   getAvailableStockByProduct,
   type InventoryStockRow,
@@ -25,6 +27,7 @@ import {
 type CashSession = {
   id: string;
   status: string;
+  openedBy?: { id?: string; username?: string } | null;
   cashRegister?: { name: string } | null;
 };
 type RxItem = { id: string; productId: string; remainingQuantity: number };
@@ -46,10 +49,11 @@ type PosData = {
 type ItemsResponse<T> = { items?: T[] };
 type SessionsResponse = { sessions?: CashSession[] };
 
-const norm = (value: string) =>
-  value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
-
 export const PosPage = () => {
+  const { user, hasPermission } = useAuth();
+  const canReadPatients = hasPermission("patients.read");
+  const canReadPrescriptions = hasPermission("prescriptions.read");
+
   const [products, setProducts] = useState<PosProduct[]>([]);
   const [stockRows, setStockRows] = useState<InventoryStockRow[]>([]);
   const [cashSessions, setCashSessions] = useState<CashSession[]>([]);
@@ -69,24 +73,32 @@ export const PosPage = () => {
       productsResponse,
       stockResponse,
       sessionsResponse,
-      patientsResponse,
-      prescriptionsResponse,
+      patientsResult,
+      prescriptionsResult,
     ] = await Promise.all([
       api.get<ItemsResponse<PosProduct>>("/products?limit=100"),
       api.get<ItemsResponse<InventoryStockRow>>("/inventory/stock?limit=100"),
-      api.get<SessionsResponse>("/cash/sessions?limit=100"),
-      api.get<ItemsResponse<PosPatient>>("/patients?limit=100&active=true"),
-      api.get<ItemsResponse<Rx>>("/prescriptions?limit=100"),
+      api.get<SessionsResponse>("/cash/sessions?status=OPEN&limit=100"),
+      canReadPatients
+        ? api
+            .get<ItemsResponse<PosPatient>>("/patients?limit=100&active=true")
+            .then((res) => res.data.items ?? [])
+        : Promise.resolve([]),
+      canReadPrescriptions
+        ? api
+            .get<ItemsResponse<Rx>>("/prescriptions?limit=100")
+            .then((res) => res.data.items ?? [])
+        : Promise.resolve([]),
     ]);
 
     return {
       products: productsResponse.data.items ?? [],
       stockRows: stockResponse.data.items ?? [],
       cashSessions: sessionsResponse.data.sessions ?? [],
-      patients: patientsResponse.data.items ?? [],
-      prescriptions: prescriptionsResponse.data.items ?? [],
+      patients: patientsResult,
+      prescriptions: prescriptionsResult,
     };
-  }, []);
+  }, [canReadPatients, canReadPrescriptions]);
 
   const applyData = useCallback((data: PosData) => {
     setProducts(data.products);
@@ -155,7 +167,7 @@ export const PosPage = () => {
           product.isActive &&
           (category === "TODAS" || product.category?.name === category) &&
           (!query ||
-            norm(
+            normalizeText(
               [
                 product.name,
                 product.sku,
@@ -163,12 +175,23 @@ export const PosPage = () => {
                 product.category?.name ?? "",
                 product.laboratory?.name ?? "",
               ].join(" "),
-            ).includes(norm(query))),
+            ).includes(normalizeText(query))),
       ),
     [products, category, query],
   );
-  const openCash =
-    cashSessions.find((session) => session.status === "OPEN") ?? null;
+  const openCash = useMemo(() => {
+    const openList = cashSessions.filter((session) => session.status === "OPEN");
+    return (
+      openList.find(
+        (session) =>
+          (user?.id && session.openedBy?.id === user.id) ||
+          (user?.username && session.openedBy?.username === user.username),
+      ) ??
+      openList[0] ??
+      null
+    );
+  }, [cashSessions, user]);
+
   const selectedPatient =
     patients.find((patient) => patient.id === selectedPatientId) ?? null;
   const total = cart.reduce(
@@ -319,7 +342,7 @@ export const PosPage = () => {
     await runApiAction(
       () =>
         api.post("/sales/checkout", {
-          code: `VTA-${Date.now()}`,
+          code: generateOperationCode("VTA"),
           cashSessionId: openCash.id,
           patientId: selectedPatientId || null,
           customerRut,
@@ -384,7 +407,7 @@ export const PosPage = () => {
 
       {error ? <div className="alert alert--error">{error}</div> : null}
 
-      {!loading && (!openCash || !hasAvailableStock) ? (
+      {!loading && !error && (!openCash || !hasAvailableStock) ? (
         <div className="alert" role="status">
           <strong>Antes de vender:</strong>{" "}
           {!openCash ? "abre una caja. " : ""}

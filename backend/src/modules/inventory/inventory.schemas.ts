@@ -7,6 +7,7 @@ export const stockQuerySchema = z.object({
   productId: z.string().uuid().optional(),
   locationId: z.string().uuid().optional(),
   expiringDays: z.coerce.number().int().positive().max(3650).optional(),
+  includeExpired: z.enum(["true", "false"]).optional(),
 });
 
 export const batchesQuerySchema = z.object({
@@ -54,4 +55,5 @@ export const alertsQuerySchema = z.object({
     "PRESCRIPTION_EXPIRING",
     "OTHER",
   ]).optional(),
+  limit: z.coerce.number().int().min(1).max(200).default(100),
 });

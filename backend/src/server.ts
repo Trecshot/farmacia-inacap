@@ -1,6 +1,6 @@
-﻿import { app } from "./app.js";
+import { app } from "./app.js";
 import { env } from "./config/env.js";
-import { prisma } from "./config/prisma.js";
+import { pool, prisma } from "./config/prisma.js";
 
 const server = app.listen(env.PORT, () => {
   console.log(`API Farmacia ejecutándose en http://localhost:${env.PORT}`);
@@ -13,10 +13,11 @@ const shutdown = async (signal: string) => {
   server.close(async () => {
     try {
       await prisma.$disconnect();
+      await pool.end();
       console.log("Conexión a PostgreSQL cerrada.");
       process.exit(0);
     } catch (error) {
-      console.error("Error cerrando Prisma:", error);
+      console.error("Error cerrando Prisma / Pool:", error);
       process.exit(1);
     }
   });

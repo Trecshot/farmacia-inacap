@@ -1,15 +1,21 @@
 import { Barcode, Boxes, Plus, RefreshCcw, Search } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
-import { ActionModal, type ActionField } from "../components/ui/ActionModal";
 import { PageLoader } from "../components/feedback/PageLoader";
+import { ActionModal, type ActionField } from "../components/ui/ActionModal";
 import { PageHeader } from "../components/ui/PageHeader";
 import { ResponsiveTable } from "../components/ui/ResponsiveTable";
 import { StatusBadge } from "../components/ui/StatusBadge";
 import { useAuth } from "../context/AuthContext";
 import { useResource } from "../hooks/useResource";
+import {
+  nullable,
+  numeric,
+  optionalNumeric,
+  runApiAction,
+} from "../lib/actionHelpers";
 import { api, getApiErrorMessage } from "../lib/api";
-import { nullable, numeric, runApiAction } from "../lib/actionHelpers";
 import { translateChoiceLabel } from "../lib/choiceLabels";
+import { clp, normalizeText } from "../lib/formatters";
 
 type Basic = {
   id: string;
@@ -45,15 +51,6 @@ type Product = {
 };
 
 type FormValues = Record<string, string | number | boolean>;
-
-const clp = new Intl.NumberFormat("es-CL", {
-  style: "currency",
-  currency: "CLP",
-  maximumFractionDigits: 0,
-});
-
-const normalize = (v: string) =>
-  v.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
 
 const categoryFields: ActionField[] = [
   { name: "code", label: "Código", required: true },
@@ -125,13 +122,13 @@ export const ProductsPage = () => {
   );
 
   const filtered = useMemo(() => {
-    const q = normalize(query.trim());
+    const q = normalizeText(query);
     return products.filter((p) => {
       if (categoryFilter !== "ALL" && p.category?.id !== categoryFilter) {
         return false;
       }
       if (!q) return true;
-      return normalize(
+      return normalizeText(
         [
           p.name,
           p.sku,
@@ -249,7 +246,7 @@ export const ProductsPage = () => {
       concentration: nullable(v.concentration),
       pharmaceuticalForm: nullable(v.pharmaceuticalForm),
       presentation: nullable(v.presentation),
-      purchasePrice: v.purchasePrice === "" ? null : numeric(v.purchasePrice),
+      purchasePrice: optionalNumeric(v.purchasePrice),
       salePrice: numeric(v.salePrice),
       minimumStock: numeric(v.minimumStock),
       categoryId: String(v.categoryId),

@@ -22,6 +22,7 @@ import { Link } from "react-router-dom";
 import { EmptyState } from "../components/feedback/EmptyState";
 import { PageLoader } from "../components/feedback/PageLoader";
 import { useResource } from "../hooks/useResource";
+import { clp, getLocalIsoDate, shortNumber } from "../lib/formatters";
 
 type DashboardData = {
   today: {
@@ -73,23 +74,7 @@ type SalesReport = {
   sales: SaleRow[];
 };
 
-const clp = new Intl.NumberFormat("es-CL", {
-  style: "currency",
-  currency: "CLP",
-  maximumFractionDigits: 0,
-});
-
-const shortNumber = new Intl.NumberFormat("es-CL", {
-  maximumFractionDigits: 0,
-});
-
-const getDayKey = (date: Date) => {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-
-  return `${year}-${month}-${day}`;
-};
+const getDayKey = (date: Date) => getLocalIsoDate(date);
 
 const buildSevenDaySeries = (sales: SaleRow[]) => {
   const today = new Date();

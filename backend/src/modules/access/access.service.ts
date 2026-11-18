@@ -1,6 +1,7 @@
+import type { z } from "zod";
+import type { Prisma } from "../../../generated/prisma/client.js";
 import { prisma } from "../../config/prisma.js";
 import { ApiError } from "../../utils/ApiError.js";
-import type { z } from "zod";
 import type {
   accessQuerySchema,
   permissionCreateSchema,
@@ -50,11 +51,15 @@ export const getRole = async (id: string) => {
   return role;
 };
 
-const replaceRolePermissions = async (roleId: string, permissionIds: string[]) => {
+const replaceRolePermissionsTx = async (
+  tx: Prisma.TransactionClient,
+  roleId: string,
+  permissionIds: string[],
+) => {
   const uniqueIds = [...new Set(permissionIds)];
 
   if (uniqueIds.length) {
-    const count = await prisma.permission.count({
+    const count = await tx.permission.count({
       where: { id: { in: uniqueIds }, isActive: true },
     });
     if (count !== uniqueIds.length) {
@@ -62,32 +67,33 @@ const replaceRolePermissions = async (roleId: string, permissionIds: string[]) =
     }
   }
 
-  await prisma.$transaction([
-    prisma.rolePermission.deleteMany({ where: { roleId } }),
-    ...(uniqueIds.length
-      ? [
-          prisma.rolePermission.createMany({
-            data: uniqueIds.map((permissionId) => ({ roleId, permissionId })),
-            skipDuplicates: true,
-          }),
-        ]
-      : []),
-  ]);
+  await tx.rolePermission.deleteMany({ where: { roleId } });
+
+  if (uniqueIds.length) {
+    await tx.rolePermission.createMany({
+      data: uniqueIds.map((permissionId) => ({ roleId, permissionId })),
+      skipDuplicates: true,
+    });
+  }
 };
 
 export const createRole = async (input: RoleCreate) => {
-  const role = await prisma.role.create({
-    data: {
-      code: input.code,
-      name: input.name,
-      description: input.description ?? null,
-      isActive: input.isActive,
-      isSystem: false,
-    },
+  const roleId = await prisma.$transaction(async (tx) => {
+    const role = await tx.role.create({
+      data: {
+        code: input.code,
+        name: input.name,
+        description: input.description ?? null,
+        isActive: input.isActive,
+        isSystem: false,
+      },
+    });
+
+    await replaceRolePermissionsTx(tx, role.id, input.permissionIds);
+    return role.id;
   });
 
-  await replaceRolePermissions(role.id, input.permissionIds);
-  return getRole(role.id);
+  return getRole(roleId);
 };
 
 export const updateRole = async (id: string, input: RoleUpdate) => {
@@ -109,18 +115,22 @@ export const updateRole = async (id: string, input: RoleUpdate) => {
     throw new ApiError(400, "Los roles del sistema no pueden ser desactivados");
   }
 
-  await prisma.role.update({
-    where: { id },
-    data: {
-      ...(input.name !== undefined ? { name: input.name } : {}),
-      ...(input.description !== undefined ? { description: input.description } : {}),
-      ...(input.isActive !== undefined ? { isActive: input.isActive } : {}),
-    },
-  });
+  await prisma.$transaction(async (tx) => {
+    await tx.role.update({
+      where: { id },
+      data: {
+        ...(input.name !== undefined ? { name: input.name } : {}),
+        ...(input.description !== undefined
+          ? { description: input.description }
+          : {}),
+        ...(input.isActive !== undefined ? { isActive: input.isActive } : {}),
+      },
+    });
 
-  if (input.permissionIds) {
-    await replaceRolePermissions(role.id, input.permissionIds);
-  }
+    if (input.permissionIds !== undefined) {
+      await replaceRolePermissionsTx(tx, role.id, input.permissionIds);
+    }
+  });
 
   return getRole(id);
 };
@@ -133,7 +143,10 @@ export const deleteRole = async (id: string) => {
   }
 
   if (role._count.users > 0) {
-    throw new ApiError(409, "No se puede eliminar un rol que tiene usuarios asignados");
+    throw new ApiError(
+      409,
+      "No se puede eliminar un rol que tiene usuarios asignados",
+    );
   }
 
   await prisma.role.delete({ where: { id } });

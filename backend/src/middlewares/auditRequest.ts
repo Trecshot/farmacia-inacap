@@ -174,6 +174,14 @@ export const auditRequest = (
       res.statusCode,
     );
 
+    const attemptedUsername =
+      action === "LOGIN_FAILED" &&
+      req.body &&
+      typeof req.body === "object" &&
+      typeof (req.body as { username?: unknown }).username === "string"
+        ? String((req.body as { username: string }).username).trim().slice(0, 80)
+        : null;
+
     void prisma.auditLog
       .create({
         data: {
@@ -182,12 +190,15 @@ export const auditRequest = (
           module: auditContext.module,
           entity: auditContext.entity,
           entityId: finalEntityId,
-          description: `${auditContext.method} ${auditContext.path} -> ${res.statusCode}`,
+          description: attemptedUsername
+            ? `${auditContext.method} ${auditContext.path} -> ${res.statusCode} (usuario: ${attemptedUsername})`
+            : `${auditContext.method} ${auditContext.path} -> ${res.statusCode}`,
           metadata: {
             method: auditContext.method,
             path: auditContext.path,
             statusCode: res.statusCode,
             durationMs: Date.now() - auditContext.startedAt,
+            ...(attemptedUsername ? { attemptedUsername } : {}),
           },
           ipAddress: req.ip?.slice(0, 64) ?? null,
           userAgent: req.get("user-agent")?.slice(0, 500) ?? null,

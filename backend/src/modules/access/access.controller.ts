@@ -1,4 +1,5 @@
 import type { Request, Response } from "express";
+import { getRouteParam } from "../../utils/routeParam.js";
 import {
   accessQuerySchema,
   permissionCreateSchema,
@@ -7,17 +8,6 @@ import {
   roleUpdateSchema,
 } from "./access.schemas.js";
 import * as service from "./access.service.js";
-import { ApiError } from "../../utils/ApiError.js";
-
-const getIdParam = (req: Request) => {
-  const id = req.params.id;
-
-  if (!id || Array.isArray(id)) {
-    throw new ApiError(400, "ID inválido");
-  }
-
-  return id;
-};
 
 export const listRolesController = async (req: Request, res: Response) => {
   res.json({
@@ -27,7 +17,7 @@ export const listRolesController = async (req: Request, res: Response) => {
 };
 
 export const getRoleController = async (req: Request, res: Response) => {
-  const id = getIdParam(req);
+  const id = getRouteParam(req, "id");
 
   res.json({
     ok: true,
@@ -43,7 +33,7 @@ export const createRoleController = async (req: Request, res: Response) => {
 };
 
 export const updateRoleController = async (req: Request, res: Response) => {
-  const id = getIdParam(req);
+  const id = getRouteParam(req, "id");
 
   res.json({
     ok: true,
@@ -55,7 +45,7 @@ export const updateRoleController = async (req: Request, res: Response) => {
 };
 
 export const deleteRoleController = async (req: Request, res: Response) => {
-  const id = getIdParam(req);
+  const id = getRouteParam(req, "id");
 
   res.json({
     ok: true,
@@ -91,7 +81,7 @@ export const updatePermissionController = async (
   req: Request,
   res: Response,
 ) => {
-  const id = getIdParam(req);
+  const id = getRouteParam(req, "id");
 
   res.json({
     ok: true,
@@ -106,7 +96,7 @@ export const deletePermissionController = async (
   req: Request,
   res: Response,
 ) => {
-  const id = getIdParam(req);
+  const id = getRouteParam(req, "id");
 
   res.json({
     ok: true,

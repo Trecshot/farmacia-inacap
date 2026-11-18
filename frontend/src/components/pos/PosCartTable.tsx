@@ -9,6 +9,7 @@ import {
   UserRound,
 } from "lucide-react";
 import type { PosProduct } from "./PosProductSearch";
+import { clp } from "../../lib/formatters";
 import "./pos.module.css";
 
 export type PosPatient = {
@@ -40,12 +41,6 @@ type Props = {
   onRemoveItem: (productId: string) => void;
   onOpenCheckout: () => void;
 };
-
-const clp = new Intl.NumberFormat("es-CL", {
-  style: "currency",
-  currency: "CLP",
-  maximumFractionDigits: 0,
-});
 
 export const PosCartTable = ({
   cart,

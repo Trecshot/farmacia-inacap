@@ -5,8 +5,9 @@ import { PageLoader } from "../components/feedback/PageLoader";
 import { PageHeader } from "../components/ui/PageHeader";
 import { useAuth } from "../context/AuthContext";
 import { useResource } from "../hooks/useResource";
-import { api } from "../lib/api";
 import { nullable, runApiAction } from "../lib/actionHelpers";
+import { api } from "../lib/api";
+import { normalizeText as norm } from "../lib/formatters";
 
 type Setting = {
   id: string;
@@ -17,15 +18,11 @@ type Setting = {
 };
 type FormValues = Record<string, string | number | boolean>;
 
-const norm = (v: string) =>
-  v.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
-
 const defaultSettingInitialValues = { isPublic: false };
 
 export const SettingsPage = () => {
   const { hasPermission } = useAuth();
-  const canUpdate =
-    hasPermission("settings.update") || hasPermission("settings.manage");
+  const canUpdate = hasPermission("settings.manage");
 
   const [q, setQ] = useState("");
   const [open, setOpen] = useState(false);

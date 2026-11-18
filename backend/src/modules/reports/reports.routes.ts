@@ -1,6 +1,9 @@
 import { Router } from "express";
 import { authenticate } from "../../middlewares/authenticate.js";
-import { requirePermission } from "../../middlewares/authorize.js";
+import {
+  requireAnyPermission,
+  requirePermission,
+} from "../../middlewares/authorize.js";
 import { asyncHandler } from "../../utils/asyncHandler.js";
 import * as c from "./reports.controller.js";
 
@@ -12,7 +15,12 @@ reportsRouter.get("/sales", requirePermission("reports.read"), asyncHandler(c.sa
 reportsRouter.get("/inventory", requirePermission("reports.read"), asyncHandler(c.inventory));
 reportsRouter.get("/purchases", requirePermission("reports.read"), asyncHandler(c.purchases));
 reportsRouter.get("/cash", requirePermission("reports.read"), asyncHandler(c.cash));
-reportsRouter.get("/controlled", requirePermission("reports.read"), asyncHandler(c.controlled));
+reportsRouter.get(
+  "/controlled",
+  requirePermission("reports.read"),
+  requireAnyPermission("controlled.read", "audit.read"),
+  asyncHandler(c.controlled),
+);
 
 reportsRouter.get("/sales.xlsx", requirePermission("reports.export"), asyncHandler(c.salesExcel));
 reportsRouter.get("/inventory.xlsx", requirePermission("reports.export"), asyncHandler(c.inventoryExcel));

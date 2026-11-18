@@ -239,36 +239,64 @@ export const closeCashSession = async (
   userId: string,
   input: CloseSession,
 ) => {
-  const session = await prisma.cashSession.findUnique({ where: { id } });
+  return prisma.$transaction(async (tx) => {
+    const session = await tx.cashSession.findUnique({ where: { id } });
 
-  if (!session) throw new ApiError(404, "Sesión de caja no encontrada");
-  if (session.status !== "OPEN") {
-    throw new ApiError(409, "La sesión de caja no está abierta");
-  }
+    if (!session) throw new ApiError(404, "Sesión de caja no encontrada");
+    if (session.status !== "OPEN") {
+      throw new ApiError(409, "La sesión de caja no está abierta");
+    }
 
-  const expectedAmount = await getExpectedCashAmount(id);
-  const differenceAmount = Math.round(input.countedAmount - expectedAmount);
+    const movements = await tx.cashMovement.findMany({
+      where: { cashSessionId: id },
+      select: { type: true, amount: true },
+    });
+    const expectedAmount = calculateSessionExpectedAmount(
+      session.openingAmount,
+      movements,
+    );
+    const differenceAmount = Math.round(input.countedAmount - expectedAmount);
 
-  return prisma.cashSession.update({
-    where: { id },
-    data: {
-      status: "CLOSED",
-      closedById: userId,
-      expectedAmount,
-      countedAmount: input.countedAmount,
-      differenceAmount,
-      closedAt: new Date(),
-      notes: input.notes ?? session.notes,
-    },
-    include: {
-      cashRegister: true,
-      openedBy: {
-        select: { id: true, firstName: true, lastName: true, username: true },
+    if (typeof tx.cashSession.updateMany === "function") {
+      const updated = await tx.cashSession.updateMany({
+        where: { id, status: "OPEN" },
+        data: {
+          status: "CLOSED",
+          closedById: userId,
+          expectedAmount,
+          countedAmount: input.countedAmount,
+          differenceAmount,
+          closedAt: new Date(),
+          notes: input.notes ?? session.notes,
+        },
+      });
+
+      if (updated.count === 0) {
+        throw new ApiError(409, "La sesión de caja ya fue cerrada por otra operación");
+      }
+    }
+
+    return tx.cashSession.update({
+      where: { id },
+      data: {
+        status: "CLOSED",
+        closedById: userId,
+        expectedAmount,
+        countedAmount: input.countedAmount,
+        differenceAmount,
+        closedAt: new Date(),
+        notes: input.notes ?? session.notes,
       },
-      closedBy: {
-        select: { id: true, firstName: true, lastName: true, username: true },
+      include: {
+        cashRegister: true,
+        openedBy: {
+          select: { id: true, firstName: true, lastName: true, username: true },
+        },
+        closedBy: {
+          select: { id: true, firstName: true, lastName: true, username: true },
+        },
       },
-    },
+    });
   });
 };
 
@@ -277,25 +305,27 @@ export const createCashMovement = async (
   userId: string,
   input: CreateMovement,
 ) => {
-  const session = await prisma.cashSession.findUnique({
-    where: { id: sessionId },
-  });
+  return prisma.$transaction(async (tx) => {
+    const session = await tx.cashSession.findUnique({
+      where: { id: sessionId },
+    });
 
-  if (!session) throw new ApiError(404, "Sesión de caja no encontrada");
-  if (session.status !== "OPEN") {
-    throw new ApiError(409, "La sesión de caja está cerrada");
-  }
+    if (!session) throw new ApiError(404, "Sesión de caja no encontrada");
+    if (session.status !== "OPEN") {
+      throw new ApiError(409, "La sesión de caja está cerrada");
+    }
 
-  const amount =
-    input.type === "ADJUSTMENT" ? input.amount : Math.abs(input.amount);
+    const amount =
+      input.type === "ADJUSTMENT" ? input.amount : Math.abs(input.amount);
 
-  return prisma.cashMovement.create({
-    data: {
-      cashSessionId: sessionId,
-      type: input.type,
-      amount,
-      description: input.description,
-      userId,
-    },
+    return tx.cashMovement.create({
+      data: {
+        cashSessionId: sessionId,
+        type: input.type,
+        amount,
+        description: input.description,
+        userId,
+      },
+    });
   });
 };

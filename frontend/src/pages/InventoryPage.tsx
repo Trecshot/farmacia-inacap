@@ -1,5 +1,6 @@
 import { AlertTriangle, RefreshCcw } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
+import { PageLoader } from "../components/feedback/PageLoader";
 import {
   BatchStockTable,
   type InventoryAlertItem,
@@ -7,17 +8,14 @@ import {
   type InventoryStockItem,
 } from "../components/inventory/BatchStockTable";
 import { ActionModal, type ActionField } from "../components/ui/ActionModal";
-import { PageLoader } from "../components/feedback/PageLoader";
 import { PageHeader } from "../components/ui/PageHeader";
 import { useAuth } from "../context/AuthContext";
 import { useResource } from "../hooks/useResource";
-import { api } from "../lib/api";
 import { nullable, numeric, runApiAction } from "../lib/actionHelpers";
+import { api } from "../lib/api";
+import { normalizeText } from "../lib/formatters";
 
 type FormValues = Record<string, string | number | boolean>;
-
-const norm = (v: string) =>
-  v.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
 
 const adjustFields: ActionField[] = [
   {
@@ -39,7 +37,7 @@ export const InventoryPage = () => {
   const [selected, setSelected] = useState<InventoryStockItem | null>(null);
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState("");
-  const [todayIso] = useState(() => new Date().toISOString());
+  const [nowTime] = useState(() => Date.now());
 
   const stockSel = useCallback(
     (p: { items: InventoryStockItem[] }) => p.items,
@@ -57,7 +55,7 @@ export const InventoryPage = () => {
   const stockRes = useResource<
     InventoryStockItem[],
     { items: InventoryStockItem[] }
-  >("/inventory/stock?limit=100", stockSel);
+  >("/inventory/stock?limit=100&includeExpired=true", stockSel);
   const locRes = useResource<
     InventoryLocationItem[],
     { locations: InventoryLocationItem[] }
@@ -76,14 +74,14 @@ export const InventoryPage = () => {
       rows.filter(
         (r) =>
           !q ||
-          norm(
+          normalizeText(
             [
               r.batch.product.name,
               r.batch.product.sku,
               r.batch.batchNumber,
               r.location.name,
             ].join(" "),
-          ).includes(norm(q)),
+          ).includes(normalizeText(q)),
       ),
     [rows, q],
   );
@@ -96,9 +94,9 @@ export const InventoryPage = () => {
   const expired = useMemo(
     () =>
       rows.filter(
-        (r) => new Date(r.batch.expirationDate).toISOString() < todayIso,
+        (r) => new Date(r.batch.expirationDate).getTime() <= nowTime,
       ).length,
-    [rows, todayIso],
+    [rows, nowTime],
   );
   const pendingAlertsList = useMemo(
     () => alerts.filter((a) => a.status === "PENDING"),

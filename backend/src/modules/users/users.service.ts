@@ -1,9 +1,9 @@
+import type { z } from "zod";
 import { prisma } from "../../config/prisma.js";
 import { ApiError } from "../../utils/ApiError.js";
-import { hashPassword } from "../../utils/password.js";
 import { getPagination, paginationMeta } from "../../utils/pagination.js";
+import { hashPassword } from "../../utils/password.js";
 import { safeUserSelect } from "../../utils/selects.js";
-import type { z } from "zod";
 import type {
   createUserSchema,
   updateUserSchema,
@@ -61,10 +61,20 @@ export const getUser = async (id: string) => {
   return user;
 };
 
-export const createUser = async (input: CreateUserInput) => {
+export const createUser = async (
+  input: CreateUserInput,
+  actorRole?: string,
+) => {
   const role = await prisma.role.findUnique({ where: { id: input.roleId } });
   if (!role || !role.isActive) {
     throw new ApiError(400, "El rol indicado no existe o está inactivo");
+  }
+
+  if (role.code === "ADMIN" && actorRole && actorRole !== "ADMIN") {
+    throw new ApiError(
+      403,
+      "Solo un administrador puede asignar el rol ADMIN",
+    );
   }
 
   const passwordHash = await hashPassword(input.password);
@@ -85,13 +95,34 @@ export const createUser = async (input: CreateUserInput) => {
   });
 };
 
-export const updateUser = async (id: string, input: UpdateUserInput) => {
+export const updateUser = async (
+  id: string,
+  input: UpdateUserInput,
+  actorRole?: string,
+) => {
   const currentUser = await getUser(id);
+
+  if (
+    currentUser.role.code === "ADMIN" &&
+    actorRole &&
+    actorRole !== "ADMIN"
+  ) {
+    throw new ApiError(
+      403,
+      "Solo un administrador puede modificar una cuenta con rol ADMIN",
+    );
+  }
 
   if (input.roleId) {
     const role = await prisma.role.findUnique({ where: { id: input.roleId } });
     if (!role || !role.isActive) {
       throw new ApiError(400, "El rol indicado no existe o está inactivo");
+    }
+    if (role.code === "ADMIN" && actorRole && actorRole !== "ADMIN") {
+      throw new ApiError(
+        403,
+        "Solo un administrador puede asignar el rol ADMIN",
+      );
     }
   }
 
@@ -109,7 +140,9 @@ export const updateUser = async (id: string, input: UpdateUserInput) => {
       where: { id },
       data: {
         ...(input.rut !== undefined ? { rut: input.rut } : {}),
-        ...(input.firstName !== undefined ? { firstName: input.firstName } : {}),
+        ...(input.firstName !== undefined
+          ? { firstName: input.firstName }
+          : {}),
         ...(input.lastName !== undefined ? { lastName: input.lastName } : {}),
         ...(input.email !== undefined ? { email: input.email } : {}),
         ...(input.phone !== undefined ? { phone: input.phone } : {}),
@@ -137,12 +170,59 @@ export const updateUser = async (id: string, input: UpdateUserInput) => {
   });
 };
 
-export const deleteUser = async (id: string, currentUserId: string) => {
+export const deleteUser = async (
+  id: string,
+  currentUserId: string,
+  actorRole?: string,
+) => {
   if (id === currentUserId) {
     throw new ApiError(400, "No puedes eliminar tu propio usuario");
   }
 
-  await getUser(id);
+  const target = await getUser(id);
+
+  if (target.role.code === "ADMIN" && actorRole && actorRole !== "ADMIN") {
+    throw new ApiError(
+      403,
+      "Solo un administrador puede eliminar o desactivar una cuenta ADMIN",
+    );
+  }
+
+  const references = await Promise.all([
+    prisma.sale.count({ where: { sellerId: id } }),
+    prisma.purchaseOrder.count({ where: { createdById: id } }),
+    prisma.purchaseReceipt.count({ where: { receivedById: id } }),
+    prisma.inventoryMovement.count({ where: { userId: id } }),
+    prisma.dispensation.count({ where: { dispensedById: id } }),
+    prisma.cashSession.count({
+      where: { OR: [{ openedById: id }, { closedById: id }] },
+    }),
+    prisma.cashMovement.count({ where: { userId: id } }),
+    prisma.controlledDrugRecord.count({ where: { userId: id } }),
+  ]);
+
+  if (references.some((count) => count > 0)) {
+    const deactivated = await prisma.$transaction(async (tx) => {
+      const updated = await tx.user.update({
+        where: { id },
+        data: { status: "INACTIVE" },
+        select: safeUserSelect,
+      });
+
+      await tx.securityToken.updateMany({
+        where: { userId: id, revokedAt: null },
+        data: { revokedAt: new Date() },
+      });
+
+      return updated;
+    });
+
+    return {
+      message:
+        "El usuario registra operaciones históricas y fue desactivado para preservar la trazabilidad",
+      user: deactivated,
+    };
+  }
 
   await prisma.user.delete({ where: { id } });
 

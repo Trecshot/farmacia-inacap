@@ -6,8 +6,37 @@ export const nullable = (value: unknown) => {
 };
 
 export const numeric = (value: unknown, fallback = 0) => {
-  const number = Number(value);
+  if (
+    value === "" ||
+    value === null ||
+    value === undefined ||
+    typeof value === "boolean"
+  ) {
+    return fallback;
+  }
+  const text = typeof value === "string" ? value.trim() : value;
+  if (text === "") {
+    return fallback;
+  }
+  const number = Number(text);
   return Number.isFinite(number) ? number : fallback;
+};
+
+export const optionalNumeric = (value: unknown): number | null => {
+  if (
+    value === "" ||
+    value === null ||
+    value === undefined ||
+    typeof value === "boolean"
+  ) {
+    return null;
+  }
+  const text = typeof value === "string" ? value.trim() : value;
+  if (text === "") {
+    return null;
+  }
+  const number = Number(text);
+  return Number.isFinite(number) ? number : null;
 };
 
 export const optionalDate = (value: unknown) => {

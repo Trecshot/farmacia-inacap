@@ -128,16 +128,18 @@ export const createPatientCoverage = async (input: PatientCoverageCreate) => {
     throw new ApiError(400, "Plan o convenio inexistente/inactivo");
   }
 
-  if (input.isPrimary) {
-    await prisma.patientCoverage.updateMany({
-      where: { patientId: input.patientId, isPrimary: true },
-      data: { isPrimary: false },
-    });
-  }
+  return prisma.$transaction(async (tx) => {
+    if (input.isPrimary) {
+      await tx.patientCoverage.updateMany({
+        where: { patientId: input.patientId, isPrimary: true },
+        data: { isPrimary: false },
+      });
+    }
 
-  return prisma.patientCoverage.create({
-    data: input,
-    include: { agreementPlan: { include: { agreement: true } }, patient: true },
+    return tx.patientCoverage.create({
+      data: input,
+      include: { agreementPlan: { include: { agreement: true } }, patient: true },
+    });
   });
 };
 
@@ -294,75 +296,87 @@ export const applyCoverageToSale = async (
   saleId: string,
   input: ApplyCoverage,
 ) => {
-  const sale = await prisma.sale.findUnique({
-    where: { id: saleId },
-    include: { coverages: true },
-  });
-  if (!sale) throw new ApiError(404, "Venta no encontrada");
-  if (sale.status !== "COMPLETED") {
-    throw new ApiError(409, "La venta debe estar completada");
-  }
+  return prisma.$transaction(async (tx) => {
+    const sale = await tx.sale.findUnique({
+      where: { id: saleId },
+      include: { coverages: true },
+    });
+    if (!sale) throw new ApiError(404, "Venta no encontrada");
+    if (sale.status !== "COMPLETED") {
+      throw new ApiError(409, "La venta debe estar completada");
+    }
 
-  const coverage = await prisma.patientCoverage.findUnique({
-    where: { id: input.patientCoverageId },
-    include: {
-      patient: true,
-      agreementPlan: {
-        include: {
-          agreement: true,
+    const coverage = await tx.patientCoverage.findUnique({
+      where: { id: input.patientCoverageId },
+      include: {
+        patient: true,
+        agreementPlan: {
+          include: {
+            agreement: true,
+          },
         },
       },
-    },
-  });
-  if (
-    !coverage ||
-    coverage.status !== "ACTIVE" ||
-    !coverage.patient.isActive ||
-    !coverage.agreementPlan.isActive ||
-    !coverage.agreementPlan.agreement.isActive
-  ) {
-    throw new ApiError(400, "Cobertura, plan o convenio inexistente o inactivo");
-  }
+    });
+    if (
+      !coverage ||
+      coverage.status !== "ACTIVE" ||
+      !coverage.patient.isActive ||
+      !coverage.agreementPlan.isActive ||
+      !coverage.agreementPlan.agreement.isActive
+    ) {
+      throw new ApiError(400, "Cobertura, plan o convenio inexistente o inactivo");
+    }
 
-  const now = new Date();
-  if (
-    !isDateValid(coverage.validFrom, coverage.validUntil, now) ||
-    !isDateValid(
-      coverage.agreementPlan.validFrom,
-      coverage.agreementPlan.validUntil,
-      now,
-    ) ||
-    !isDateValid(
-      coverage.agreementPlan.agreement.validFrom,
-      coverage.agreementPlan.agreement.validUntil,
-      now,
-    )
-  ) {
-    throw new ApiError(409, "La cobertura, plan o convenio está fuera de vigencia");
-  }
+    const now = new Date();
+    if (
+      !isDateValid(coverage.validFrom, coverage.validUntil, now) ||
+      !isDateValid(
+        coverage.agreementPlan.validFrom,
+        coverage.agreementPlan.validUntil,
+        now,
+      ) ||
+      !isDateValid(
+        coverage.agreementPlan.agreement.validFrom,
+        coverage.agreementPlan.agreement.validUntil,
+        now,
+      )
+    ) {
+      throw new ApiError(409, "La cobertura, plan o convenio está fuera de vigencia");
+    }
 
-  if (!sale.patientId || sale.patientId !== coverage.patientId) {
-    throw new ApiError(400, "La cobertura no corresponde al paciente de la venta");
-  }
+    if (!sale.patientId || sale.patientId !== coverage.patientId) {
+      throw new ApiError(400, "La cobertura no corresponde al paciente de la venta");
+    }
 
-  const alreadyApplied = sale.coverages.reduce(
-    (sum, item) => sum + Number(item.approvedAmount),
-    0,
-  );
-  const availableDiscount = Math.max(
-    0,
-    Number(sale.discountAmount) - alreadyApplied,
-  );
+    const remainingDiscount = Math.max(0, Number(sale.discountAmount));
 
-  if (input.approvedAmount > availableDiscount) {
-    throw new ApiError(
-      400,
-      "El monto aprobado supera el descuento disponible de la venta. En POS, aplica el descuento de convenio antes del checkout.",
-    );
-  }
+    if (input.approvedAmount > remainingDiscount) {
+      throw new ApiError(
+        400,
+        "El monto aprobado supera el descuento disponible de la venta. En POS, aplica el descuento de convenio antes del checkout.",
+      );
+    }
 
-  return prisma.$transaction(async (tx) => {
-    const record = await tx.saleCoverage.create({
+    const updatedSale = await tx.sale.updateMany({
+      where: {
+        id: saleId,
+        status: "COMPLETED",
+        discountAmount: { gte: input.approvedAmount },
+      },
+      data: {
+        coverageAmount: { increment: input.approvedAmount },
+        discountAmount: { decrement: input.approvedAmount },
+      },
+    });
+
+    if (updatedSale.count === 0) {
+      throw new ApiError(
+        409,
+        "El descuento disponible de la venta ya fue consumido por otra operación",
+      );
+    }
+
+    return tx.saleCoverage.create({
       data: {
         saleId,
         patientCoverageId: coverage.id,
@@ -381,15 +395,5 @@ export const applyCoverageToSale = async (
         },
       },
     });
-
-    await tx.sale.update({
-      where: { id: saleId },
-      data: {
-        coverageAmount: { increment: input.approvedAmount },
-        discountAmount: { decrement: input.approvedAmount },
-      },
-    });
-
-    return record;
   });
 };

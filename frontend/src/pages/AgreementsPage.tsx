@@ -1,15 +1,21 @@
 import { BadgePercent, Handshake, Layers3, Plus, Search } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
-import { ActionModal, type ActionField } from "../components/ui/ActionModal";
 import { PageLoader } from "../components/feedback/PageLoader";
+import { ActionModal, type ActionField } from "../components/ui/ActionModal";
 import { PageHeader } from "../components/ui/PageHeader";
 import { ResponsiveTable } from "../components/ui/ResponsiveTable";
 import { StatusBadge } from "../components/ui/StatusBadge";
 import { useAuth } from "../context/AuthContext";
 import { useResource } from "../hooks/useResource";
+import {
+  nullable,
+  numeric,
+  optionalNumeric,
+  runApiAction,
+} from "../lib/actionHelpers";
 import { api } from "../lib/api";
-import { nullable, numeric, runApiAction } from "../lib/actionHelpers";
 import { translateChoiceLabel } from "../lib/choiceLabels";
+import { normalizeText } from "../lib/formatters";
 
 type Product = { id: string; sku: string; name: string; isActive: boolean };
 type Benefit = {
@@ -45,9 +51,6 @@ type Agreement = {
   plans: Plan[];
 };
 type FormValues = Record<string, string | number | boolean>;
-
-const norm = (v: string) =>
-  v.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
 
 const agreementFields: ActionField[] = [
   { name: "code", label: "Código", required: true },
@@ -85,6 +88,7 @@ const planFields: ActionField[] = [
 export const AgreementsPage = () => {
   const { hasPermission } = useAuth();
   const canManage = hasPermission("agreements.manage");
+  const canReadProducts = hasPermission("products.read");
 
   const [q, setQ] = useState("");
   const [modal, setModal] = useState<"agreement" | "plan" | "benefit" | null>(
@@ -111,6 +115,7 @@ export const AgreementsPage = () => {
   const productsRes = useResource<Product[], { items: Product[] }>(
     "/products?limit=100",
     prodSel,
+    { enabled: canManage && canReadProducts },
   );
 
   const rows = useMemo(() => res.data ?? [], [res.data]);
@@ -124,8 +129,8 @@ export const AgreementsPage = () => {
       rows.filter(
         (r) =>
           !q ||
-          norm([r.code, r.name, r.type, r.rut ?? ""].join(" ")).includes(
-            norm(q),
+          normalizeText([r.code, r.name, r.type, r.rut ?? ""].join(" ")).includes(
+            normalizeText(q),
           ),
       ),
     [rows, q],
@@ -195,8 +200,7 @@ export const AgreementsPage = () => {
             productId: nullable(v.productId),
             discountType: String(v.discountType),
             discountValue: numeric(v.discountValue),
-            maximumDiscount:
-              v.maximumDiscount === "" ? null : numeric(v.maximumDiscount),
+            maximumDiscount: optionalNumeric(v.maximumDiscount),
             minimumQuantity: numeric(v.minimumQuantity, 1),
             validFrom: nullable(v.validFrom),
             validUntil: nullable(v.validUntil),
@@ -430,7 +434,7 @@ export const AgreementsPage = () => {
                               className="row-action"
                               onClick={() => {
                                 setSelectedAgreement(r);
-                                setSelectedPlan(r.plans[0]);
+                                setSelectedPlan(r.plans[0] ?? null);
                                 setModal("benefit");
                               }}
                             >

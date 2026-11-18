@@ -6,16 +6,17 @@ import {
   ShoppingBag,
 } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
-import { ActionModal, type ActionField } from "../components/ui/ActionModal";
 import { PageLoader } from "../components/feedback/PageLoader";
+import { ActionModal, type ActionField } from "../components/ui/ActionModal";
 import { PageHeader } from "../components/ui/PageHeader";
 import { ResponsiveTable } from "../components/ui/ResponsiveTable";
 import { StatusBadge } from "../components/ui/StatusBadge";
 import { useAuth } from "../context/AuthContext";
 import { useResource } from "../hooks/useResource";
+import { runApiAction } from "../lib/actionHelpers";
 import { api } from "../lib/api";
 import { translateChoiceLabel } from "../lib/choiceLabels";
-import { runApiAction } from "../lib/actionHelpers";
+import { clp, normalizeText } from "../lib/formatters";
 
 type Sale = {
   id: string;
@@ -40,13 +41,6 @@ type SalesResponse = { items: Sale[] };
 type SaleActionValues = Record<string, string | number | boolean>;
 
 const emptySales: Sale[] = [];
-const clp = new Intl.NumberFormat("es-CL", {
-  style: "currency",
-  currency: "CLP",
-  maximumFractionDigits: 0,
-});
-const norm = (value: string) =>
-  value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
 const isToday = (value: string) => {
   const date = new Date(value);
   const today = new Date();
@@ -91,7 +85,7 @@ export const SalesPage = () => {
         (sale) =>
           (status === "ALL" || sale.status === status) &&
           (!query ||
-            norm(
+            normalizeText(
               [
                 sale.code,
                 sale.seller?.username ?? "",
@@ -99,7 +93,7 @@ export const SalesPage = () => {
                 sale.patient?.firstName ?? "",
                 sale.patient?.lastName ?? "",
               ].join(" "),
-            ).includes(norm(query))),
+            ).includes(normalizeText(query))),
       ),
     [rows, query, status],
   );

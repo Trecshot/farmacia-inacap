@@ -10,6 +10,7 @@ import { useResource } from "../hooks/useResource";
 import { api, getApiErrorMessage } from "../lib/api";
 import { nullable, runApiAction } from "../lib/actionHelpers";
 import { translateChoiceLabel } from "../lib/choiceLabels";
+import { normalizeText as norm } from "../lib/formatters";
 
 type Role = { id: string; code: string; name: string; isActive?: boolean };
 type User = {
@@ -24,9 +25,6 @@ type User = {
   role: Role;
 };
 type FormValues = Record<string, string | number | boolean>;
-
-const norm = (v: string) =>
-  v.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
 
 const defaultUserInitialValues = { status: "ACTIVE" };
 

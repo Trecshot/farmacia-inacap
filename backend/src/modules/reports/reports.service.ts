@@ -126,33 +126,58 @@ export const dashboard = async () => {
 
 export const salesReport = async (period: Period) => {
   const dateRange = range(period);
-  const sales = await prisma.sale.findMany({
-    where: {
-      status: "COMPLETED",
-      ...(dateRange ? { saleDate: dateRange } : {}),
-    },
-    include: {
-      seller: { select: { username: true, firstName: true, lastName: true } },
-      patient: { select: { rut: true, firstName: true, lastName: true } },
-      payments: true,
-      coverages: true,
-      _count: { select: { items: true } },
-    },
-    orderBy: { saleDate: "desc" },
-  });
+  const where = {
+    status: "COMPLETED" as const,
+    ...(dateRange ? { saleDate: dateRange } : {}),
+  };
+
+  const [sales, summaryAgg] = await Promise.all([
+    prisma.sale.findMany({
+      where,
+      include: {
+        seller: { select: { username: true, firstName: true, lastName: true } },
+        patient: { select: { rut: true, firstName: true, lastName: true } },
+        payments: true,
+        coverages: true,
+        _count: { select: { items: true } },
+      },
+      take: period.limit ?? 500,
+      orderBy: { saleDate: "desc" },
+    }),
+    typeof prisma.sale.aggregate === "function"
+      ? prisma.sale.aggregate({
+          where,
+          _count: { _all: true },
+          _sum: {
+            totalAmount: true,
+            discountAmount: true,
+            coverageAmount: true,
+          },
+        })
+      : Promise.resolve(null),
+  ]);
 
   return {
     summary: {
-      count: sales.length,
-      total: sales.reduce((sum, sale) => sum + Number(sale.totalAmount), 0),
-      discounts: sales.reduce((sum, sale) => sum + Number(sale.discountAmount), 0),
-      coverages: sales.reduce((sum, sale) => sum + Number(sale.coverageAmount), 0),
+      count: summaryAgg?._count._all ?? sales.length,
+      total: Number(
+        summaryAgg?._sum.totalAmount ??
+          sales.reduce((sum, sale) => sum + Number(sale.totalAmount), 0),
+      ),
+      discounts: Number(
+        summaryAgg?._sum.discountAmount ??
+          sales.reduce((sum, sale) => sum + Number(sale.discountAmount), 0),
+      ),
+      coverages: Number(
+        summaryAgg?._sum.coverageAmount ??
+          sales.reduce((sum, sale) => sum + Number(sale.coverageAmount), 0),
+      ),
     },
     sales,
   };
 };
 
-export const inventoryReport = async () => {
+export const inventoryReport = async (limit = 1000) => {
   const now = new Date();
   const products = await prisma.product.findMany({
     where: { isActive: true },
@@ -164,6 +189,7 @@ export const inventoryReport = async () => {
         orderBy: { expirationDate: "asc" },
       },
     },
+    take: limit,
     orderBy: { name: "asc" },
   });
 
@@ -202,6 +228,7 @@ export const purchasesReport = async (period: Period) => {
   const orders = await prisma.purchaseOrder.findMany({
     where: dateRange ? { orderDate: dateRange } : {},
     include: { supplier: true, details: { include: { product: true } } },
+    take: period.limit ?? 500,
     orderBy: { orderDate: "desc" },
   });
 
@@ -223,6 +250,7 @@ export const cashReport = async (period: Period) => {
       movements: true,
       _count: { select: { sales: true } },
     },
+    take: period.limit ?? 500,
     orderBy: { openedAt: "desc" },
   });
 };
@@ -239,6 +267,7 @@ export const controlledReport = async (period: Period) => {
       prescription: true,
       user: { select: { username: true, firstName: true, lastName: true } },
     },
+    take: period.limit ?? 500,
     orderBy: { occurredAt: "desc" },
   });
 };

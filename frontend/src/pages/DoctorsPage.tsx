@@ -9,6 +9,7 @@ import { useAuth } from "../context/AuthContext";
 import { useResource } from "../hooks/useResource";
 import { api, getApiErrorMessage } from "../lib/api";
 import { nullable, runApiAction } from "../lib/actionHelpers";
+import { normalizeText as norm } from "../lib/formatters";
 
 type Doctor = {
   id: string;
@@ -23,9 +24,6 @@ type Doctor = {
   _count?: { prescriptions: number };
 };
 type FormValues = Record<string, string | number | boolean>;
-
-const norm = (v: string) =>
-  v.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
 
 const doctorFields: ActionField[] = [
   { name: "rut", label: "RUT", required: true },

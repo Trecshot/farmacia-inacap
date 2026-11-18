@@ -49,18 +49,21 @@ const mockTx = {
   },
   taxDocument: {
     create: vi.fn(),
+    update: vi.fn(),
   },
 };
 
 const mockPrisma = {
   $transaction: vi.fn(async (cb: (tx: typeof mockTx) => unknown) => cb(mockTx)),
+  sale: mockTx.sale,
+  taxDocument: mockTx.taxDocument,
 };
 
 vi.mock("../../config/prisma.js", () => ({
   prisma: mockPrisma,
 }));
 
-const { checkout } = await import("./sales.service.js");
+const { checkout, issueTaxDocumentMock } = await import("./sales.service.js");
 
 describe("Sales Service Integration (src/modules/sales/sales.service.ts)", () => {
   beforeEach(() => {
@@ -68,6 +71,7 @@ describe("Sales Service Integration (src/modules/sales/sales.service.ts)", () =>
     mockTx.cashSession.findUnique.mockResolvedValue({
       id: "sess-open",
       status: "OPEN",
+      openedById: "seller-1",
     });
   });
 
@@ -86,7 +90,6 @@ describe("Sales Service Integration (src/modules/sales/sales.service.ts)", () =>
     mockTx.sale.create.mockResolvedValue({ id: "sale-1", code: "VTA-001" });
     mockTx.saleItem.create.mockResolvedValue({ id: "sitem-1" });
 
-    // Dos lotes ordenados por vencimiento (FEFO): el primero tiene 3 unidades, el segundo 10
     mockTx.inventoryStock.findMany.mockResolvedValue([
       {
         batchId: "batch-early",
@@ -172,7 +175,6 @@ describe("Sales Service Integration (src/modules/sales/sales.service.ts)", () =>
     ]);
     mockTx.sale.create.mockResolvedValue({ id: "sale-rollback" });
 
-    // Solo hay 2 unidades disponibles y se solicitan 4
     mockTx.inventoryStock.findMany.mockResolvedValue([
       {
         batchId: "batch-1",
@@ -236,5 +238,47 @@ describe("Sales Service Integration (src/modules/sales/sales.service.ts)", () =>
     );
 
     expect(mockTx.sale.create).not.toHaveBeenCalled();
+  });
+
+  it("impide registrar una venta en una sesión de caja abierta por otro cajero", async () => {
+    mockTx.cashSession.findUnique.mockResolvedValue({
+      id: "sess-other",
+      status: "OPEN",
+      openedById: "seller-other",
+    });
+
+    await expect(
+      checkout("seller-1", {
+        code: "VTA-UNAUTH-01",
+        cashSessionId: "sess-other",
+        taxRate: 19,
+        taxDocumentType: "RECEIPT",
+        items: [{ productId: "prod-1", quantity: 1, discountAmount: 0 }],
+        payments: [{ method: "CASH", amount: 2000 }],
+      }),
+    ).rejects.toThrowError(
+      new ApiError(
+        403,
+        "No puedes registrar ventas en una sesión de caja abierta por otro usuario",
+      ),
+    );
+  });
+
+  it("impide re-emitir un documento tributario que ya se encuentra en estado ISSUED", async () => {
+    mockTx.sale.findUnique.mockResolvedValue({
+      id: "sale-issued",
+      status: "COMPLETED",
+      taxDocument: {
+        id: "dte-1",
+        status: "ISSUED",
+        folio: "MOCK-12345",
+      },
+    });
+
+    await expect(
+      issueTaxDocumentMock("sale-issued", { folio: "MOCK-99999" }),
+    ).rejects.toThrowError(
+      new ApiError(409, "El documento tributario ya fue emitido"),
+    );
   });
 });

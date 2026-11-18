@@ -8,8 +8,12 @@ import {
   type ReactNode,
 } from "react";
 
-import { api } from "../lib/api";
 import { hasUserPermission } from "../lib/access";
+import {
+  api,
+  setAccessToken,
+  setUnauthorizedHandler,
+} from "../lib/api";
 import type {
   AuthUser,
   LoginResponse,
@@ -28,19 +32,38 @@ type AuthContextValue = {
 const AuthContext =
   createContext<AuthContextValue | undefined>(undefined);
 
-const ACCESS_KEY = "farmacia_access_token";
-const REFRESH_KEY = "farmacia_refresh_token";
-const USER_KEY = "farmacia_user";
+const LEGACY_ACCESS_KEY = "farmacia_access_token";
+const LEGACY_REFRESH_KEY = "farmacia_refresh_token";
+const USER_CACHE_KEY = "farmacia_user";
 
-const getStoredUser = (): AuthUser | null => {
+const purgeLegacyTokensFromStorage = () => {
   try {
-    const raw = localStorage.getItem(USER_KEY);
+    localStorage.removeItem(LEGACY_ACCESS_KEY);
+    localStorage.removeItem(LEGACY_REFRESH_KEY);
+  } catch {
+    // Ignore storage access errors in restricted environments
+  }
+};
 
-    return raw
-      ? (JSON.parse(raw) as AuthUser)
-      : null;
+const getCachedUser = (): AuthUser | null => {
+  try {
+    const raw = sessionStorage.getItem(USER_CACHE_KEY);
+    return raw ? (JSON.parse(raw) as AuthUser) : null;
   } catch {
     return null;
+  }
+};
+
+const setCachedUser = (user: AuthUser | null) => {
+  try {
+    if (user) {
+      sessionStorage.setItem(USER_CACHE_KEY, JSON.stringify(user));
+    } else {
+      sessionStorage.removeItem(USER_CACHE_KEY);
+    }
+    localStorage.removeItem(USER_CACHE_KEY);
+  } catch {
+    // Ignore storage quota/availability errors
   }
 };
 
@@ -49,61 +72,41 @@ export const AuthProvider = ({
 }: {
   children: ReactNode;
 }) => {
-  const [user, setUser] =
-    useState<AuthUser | null>(() =>
-      localStorage.getItem(ACCESS_KEY) ? getStoredUser() : null,
-    );
+  const [user, setUser] = useState<AuthUser | null>(() => {
+    purgeLegacyTokensFromStorage();
+    return getCachedUser();
+  });
 
-  const [loading, setLoading] =
-    useState(() => Boolean(localStorage.getItem(ACCESS_KEY)));
+  const [loading, setLoading] = useState(true);
 
   const clearSession = useCallback(() => {
-    localStorage.removeItem(ACCESS_KEY);
-    localStorage.removeItem(REFRESH_KEY);
-    localStorage.removeItem(USER_KEY);
-
+    purgeLegacyTokensFromStorage();
+    setAccessToken(null);
+    setCachedUser(null);
     setUser(null);
   }, []);
 
-  const refreshProfile =
-    useCallback(async () => {
-      const accessToken =
-        localStorage.getItem(ACCESS_KEY);
+  useEffect(() => {
+    setUnauthorizedHandler(clearSession);
+    return () => {
+      setUnauthorizedHandler(null);
+    };
+  }, [clearSession]);
 
-      if (!accessToken) {
-        clearSession();
-        setLoading(false);
-        return;
-      }
-
-      try {
-        const { data } =
-          await api.get<{ user: AuthUser }>("/auth/me");
-
-        const profile = data.user;
-
-        setUser(profile);
-
-        localStorage.setItem(
-          USER_KEY,
-          JSON.stringify(profile),
-        );
-      } catch {
-        clearSession();
-      } finally {
-        setLoading(false);
-      }
-    }, [clearSession]);
+  const refreshProfile = useCallback(async () => {
+    try {
+      const { data } = await api.get<{ user: AuthUser }>("/auth/me");
+      const profile = data.user;
+      setUser(profile);
+      setCachedUser(profile);
+    } catch {
+      clearSession();
+    } finally {
+      setLoading(false);
+    }
+  }, [clearSession]);
 
   useEffect(() => {
-    const accessToken = localStorage.getItem(ACCESS_KEY);
-
-    if (!accessToken) {
-      localStorage.removeItem(REFRESH_KEY);
-      localStorage.removeItem(USER_KEY);
-      return;
-    }
-
     let active = true;
 
     api
@@ -111,7 +114,7 @@ export const AuthProvider = ({
       .then(({ data }) => {
         if (!active) return;
         setUser(data.user);
-        localStorage.setItem(USER_KEY, JSON.stringify(data.user));
+        setCachedUser(data.user);
       })
       .catch(() => {
         if (!active) return;
@@ -129,34 +132,15 @@ export const AuthProvider = ({
   }, [clearSession]);
 
   const login = useCallback(
-    async (
-      username: string,
-      password: string,
-    ) => {
-      const { data } =
-        await api.post<LoginResponse>(
-          "/auth/login",
-          {
-            username,
-            password,
-          },
-        );
+    async (username: string, password: string) => {
+      const { data } = await api.post<LoginResponse>("/auth/login", {
+        username,
+        password,
+      });
 
-      localStorage.setItem(
-        ACCESS_KEY,
-        data.accessToken,
-      );
-
-      localStorage.setItem(
-        REFRESH_KEY,
-        data.refreshToken,
-      );
-
-      localStorage.setItem(
-        USER_KEY,
-        JSON.stringify(data.user),
-      );
-
+      purgeLegacyTokensFromStorage();
+      setAccessToken(data.accessToken);
+      setCachedUser(data.user);
       setUser(data.user);
 
       return data.user;
@@ -165,15 +149,8 @@ export const AuthProvider = ({
   );
 
   const logout = useCallback(async () => {
-    const refreshToken =
-      localStorage.getItem(REFRESH_KEY);
-
     try {
-      if (refreshToken) {
-        await api.post("/auth/logout", {
-          refreshToken,
-        });
-      }
+      await api.post("/auth/logout", {});
     } catch {
       // El cierre local igualmente se realiza.
     } finally {
@@ -181,34 +158,32 @@ export const AuthProvider = ({
     }
   }, [clearSession]);
 
-  const hasPermission =
-    useCallback(
-      (permission: string) => {
-        return hasUserPermission(user, permission);
-      },
-      [user],
-    );
+  const hasPermission = useCallback(
+    (permission: string) => {
+      return hasUserPermission(user, permission);
+    },
+    [user],
+  );
 
-  const value =
-    useMemo<AuthContextValue>(
-      () => ({
-        user,
-        loading,
-        authenticated: Boolean(user),
-        login,
-        logout,
-        refreshProfile,
-        hasPermission,
-      }),
-      [
-        user,
-        loading,
-        login,
-        logout,
-        refreshProfile,
-        hasPermission,
-      ],
-    );
+  const value = useMemo<AuthContextValue>(
+    () => ({
+      user,
+      loading,
+      authenticated: Boolean(user),
+      login,
+      logout,
+      refreshProfile,
+      hasPermission,
+    }),
+    [
+      user,
+      loading,
+      login,
+      logout,
+      refreshProfile,
+      hasPermission,
+    ],
+  );
 
   return (
     <AuthContext.Provider value={value}>
@@ -219,8 +194,7 @@ export const AuthProvider = ({
 
 // eslint-disable-next-line react-refresh/only-export-components
 export const useAuth = () => {
-  const context =
-    useContext(AuthContext);
+  const context = useContext(AuthContext);
 
   if (!context) {
     throw new Error(

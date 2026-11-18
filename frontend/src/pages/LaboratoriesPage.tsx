@@ -9,6 +9,7 @@ import { useAuth } from "../context/AuthContext";
 import { useResource } from "../hooks/useResource";
 import { nullable, runApiAction } from "../lib/actionHelpers";
 import { api, getApiErrorMessage } from "../lib/api";
+import { normalizeText as norm } from "../lib/formatters";
 
 type Laboratory = {
   id: string;
@@ -19,12 +20,6 @@ type Laboratory = {
 };
 
 type FormValues = Record<string, string | number | boolean>;
-
-const norm = (value: string) =>
-  value
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase();
 
 const laboratoryFields: ActionField[] = [
   { name: "code", label: "Código", required: true },

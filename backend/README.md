@@ -19,7 +19,7 @@ NODE_ENV=development
 CORS_ORIGIN="http://localhost:5173"
 
 JWT_ACCESS_SECRET="cambia_este_secreto_por_uno_de_al_menos_32_caracteres_seguros"
-JWT_ACCESS_EXPIRES_IN="8h"
+JWT_ACCESS_EXPIRES_IN="15m"
 REFRESH_TOKEN_DAYS=7
 
 ADMIN_RUT="11.111.111-1"
@@ -27,7 +27,7 @@ ADMIN_FIRST_NAME="Administrador"
 ADMIN_LAST_NAME="Sistema"
 ADMIN_EMAIL="admin@farmacia.local"
 ADMIN_USERNAME="admin"
-ADMIN_PASSWORD="administrador"
+ADMIN_PASSWORD="cambia_esta_clave_admin_segura"
 ```
 
 > **Importante:** Cambia `JWT_ACCESS_SECRET` y `ADMIN_PASSWORD` antes de desplegar en producción.
@@ -44,7 +44,7 @@ Comandos principales:
 # Validar el esquema de base de datos
 npm run prisma:validate
 
-# Generar el cliente tipado en src/generated/prisma
+# Generar el cliente tipado en generated/prisma
 npm run prisma:generate
 
 # Ejecutar migraciones en entorno de desarrollo

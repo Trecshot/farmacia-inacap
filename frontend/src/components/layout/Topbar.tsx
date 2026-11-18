@@ -3,8 +3,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 
 import { useAuth } from "../../context/AuthContext";
-import { navigation } from "./navigation";
+import { api } from "../../lib/api";
 import "./layout.module.css";
+import { navigation } from "./navigation";
 
 const findRouteLabel = (pathname: string) => {
   for (const section of navigation) {
@@ -35,6 +36,7 @@ export const Topbar = ({
   const location = useLocation();
 
   const [input, setInput] = useState("");
+  const [online, setOnline] = useState(true);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const initials =
@@ -46,6 +48,29 @@ export const Topbar = ({
   );
 
   const roleLabel = getRoleLabel(user?.role);
+
+  useEffect(() => {
+    let active = true;
+
+    const checkHealth = () => {
+      api
+        .get("/health")
+        .then(() => {
+          if (active) setOnline(true);
+        })
+        .catch(() => {
+          if (active) setOnline(false);
+        });
+    };
+
+    checkHealth();
+    const timer = window.setInterval(checkHealth, 60000);
+
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, []);
 
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
@@ -136,9 +161,21 @@ export const Topbar = ({
       </div>
 
       <div className="topbar__right">
-        <div className="topbar__api-status" title="Backend disponible">
-          <span />
-          <strong>En línea</strong>
+        <div
+          className="topbar__api-status"
+          title={online ? "Backend disponible" : "Sin conexión con el backend"}
+        >
+          <span
+            style={
+              online
+                ? undefined
+                : {
+                    background: "var(--danger)",
+                    boxShadow: "0 0 0 4px rgba(180, 65, 65, 0.14)",
+                  }
+            }
+          />
+          <strong>{online ? "En línea" : "Sin conexión"}</strong>
         </div>
 
         <div className="topbar__divider" />
@@ -156,7 +193,7 @@ export const Topbar = ({
           <button
             type="button"
             className="topbar__logout"
-            onClick={handleLogout}
+            onClick={() => void handleLogout()}
             title="Cerrar sesión"
             aria-label="Cerrar sesión"
           >

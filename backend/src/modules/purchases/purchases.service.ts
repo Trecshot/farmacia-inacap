@@ -215,6 +215,28 @@ export const receivePurchaseOrder = async (
       );
     }
 
+    const uniqueLocationIds = [...new Set(input.items.map((i) => i.locationId))];
+    const activeLocationsMap = new Map<string, boolean>();
+
+    if (typeof tx.inventoryLocation.findMany === "function") {
+      const locations = await tx.inventoryLocation.findMany({
+        where: { id: { in: uniqueLocationIds }, isActive: true },
+        select: { id: true, isActive: true },
+      });
+      for (const loc of locations) {
+        activeLocationsMap.set(loc.id, Boolean(loc.isActive));
+      }
+    } else {
+      for (const locId of uniqueLocationIds) {
+        const location = await tx.inventoryLocation.findUnique({
+          where: { id: locId },
+        });
+        if (location?.isActive) {
+          activeLocationsMap.set(locId, true);
+        }
+      }
+    }
+
     for (const item of input.items) {
       const detail = detailByProduct.get(item.productId);
 
@@ -243,11 +265,7 @@ export const receivePurchaseOrder = async (
         );
       }
 
-      const location = await tx.inventoryLocation.findUnique({
-        where: { id: item.locationId },
-      });
-
-      if (!location || !location.isActive) {
+      if (!activeLocationsMap.get(item.locationId)) {
         throw new ApiError(400, "Ubicación de inventario inexistente o inactiva");
       }
     }
@@ -272,6 +290,13 @@ export const receivePurchaseOrder = async (
           },
         },
       });
+
+      if (existingBatch?.isBlocked) {
+        throw new ApiError(
+          409,
+          `El lote ${item.batchNumber} se encuentra bloqueado y no admite nuevas recepciones`,
+        );
+      }
 
       const batch = existingBatch
         ? existingBatch
@@ -350,12 +375,31 @@ export const receivePurchaseOrder = async (
         });
       }
 
-      await tx.purchaseOrderDetail.update({
-        where: { id: detail.id },
-        data: {
-          quantityReceived: { increment: item.quantity },
-        },
-      });
+      if (typeof tx.purchaseOrderDetail.updateMany === "function") {
+        const updatedDetail = await tx.purchaseOrderDetail.updateMany({
+          where: {
+            id: detail.id,
+            quantityReceived: { lte: detail.quantityOrdered - item.quantity },
+          },
+          data: {
+            quantityReceived: { increment: item.quantity },
+          },
+        });
+
+        if (updatedDetail.count === 0) {
+          throw new ApiError(
+            409,
+            `Conflicto de concurrencia: la cantidad recibida para ${detail.product.name} supera el saldo pendiente`,
+          );
+        }
+      } else {
+        await tx.purchaseOrderDetail.update({
+          where: { id: detail.id },
+          data: {
+            quantityReceived: { increment: item.quantity },
+          },
+        });
+      }
     }
 
     const refreshedDetails = await tx.purchaseOrderDetail.findMany({

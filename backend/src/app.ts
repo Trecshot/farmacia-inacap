@@ -8,6 +8,7 @@ import { auditRequest } from "./middlewares/auditRequest.js";
 import { errorHandler } from "./middlewares/errorHandler.js";
 import { notFound } from "./middlewares/notFound.js";
 import { apiRouter } from "./routes/index.js";
+import { ApiError } from "./utils/ApiError.js";
 
 export const app = express();
 
@@ -20,22 +21,15 @@ const allowedOrigins = env.CORS_ORIGIN
   .map((origin) => origin.trim())
   .filter(Boolean);
 
-const awsS3WebsiteRegex =
-  /^http:\/\/farmagestion-\d+-\d+\.s3-website-us-east-1\.amazonaws\.com$/;
-
 app.use(
   cors({
     origin: (origin, callback) => {
-      if (
-        !origin ||
-        allowedOrigins.includes(origin) ||
-        awsS3WebsiteRegex.test(origin)
-      ) {
+      if (!origin || allowedOrigins.includes(origin)) {
         callback(null, true);
         return;
       }
 
-      callback(new Error(`Origen no permitido por CORS: ${origin}`));
+      callback(new ApiError(403, `Origen no permitido por CORS: ${origin}`));
     },
     credentials: true,
   }),

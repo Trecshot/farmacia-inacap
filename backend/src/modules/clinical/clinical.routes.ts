@@ -1,6 +1,9 @@
 import { Router } from "express";
 import { authenticate } from "../../middlewares/authenticate.js";
-import { requirePermission } from "../../middlewares/authorize.js";
+import {
+  requireAnyPermission,
+  requirePermission,
+} from "../../middlewares/authorize.js";
 import { asyncHandler } from "../../utils/asyncHandler.js";
 import * as c from "./clinical.controller.js";
 
@@ -14,9 +17,9 @@ patientsRouter.delete("/:id", requirePermission("patients.delete"), asyncHandler
 
 export const doctorsRouter = Router();
 doctorsRouter.use(authenticate);
-doctorsRouter.get("/", requirePermission("prescriptions.read"), asyncHandler(c.listDoctors));
-doctorsRouter.get("/:id", requirePermission("prescriptions.read"), asyncHandler(c.getDoctor));
-doctorsRouter.post("/", requirePermission("prescriptions.create"), asyncHandler(c.createDoctor));
+doctorsRouter.get("/", requireAnyPermission("doctors.read", "prescriptions.read"), asyncHandler(c.listDoctors));
+doctorsRouter.get("/:id", requireAnyPermission("doctors.read", "prescriptions.read"), asyncHandler(c.getDoctor));
+doctorsRouter.post("/", requireAnyPermission("doctors.create", "prescriptions.create"), asyncHandler(c.createDoctor));
 doctorsRouter.patch("/:id", requirePermission("doctors.update"), asyncHandler(c.updateDoctor));
 doctorsRouter.delete("/:id", requirePermission("doctors.delete"), asyncHandler(c.deleteDoctor));
 

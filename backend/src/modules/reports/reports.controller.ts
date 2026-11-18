@@ -108,6 +108,12 @@ export const salesPdf = async (req: Request, res: Response) => {
   res.setHeader("Content-Disposition", 'attachment; filename="reporte-ventas.pdf"');
 
   const doc = new PDFDocument({ margin: 40 });
+  doc.on("error", (error) => {
+    console.error("Error generando PDF de ventas:", error);
+    if (!res.headersSent) {
+      res.status(500).end();
+    }
+  });
   doc.pipe(res);
 
   doc.fontSize(18).text("Reporte de Ventas - Farmacia");
@@ -118,11 +124,21 @@ export const salesPdf = async (req: Request, res: Response) => {
   doc.text(`Coberturas: $${Math.round(report.summary.coverages).toLocaleString("es-CL")}`);
   doc.moveDown();
 
-  for (const sale of report.sales.slice(0, 200)) {
+  const displayedSales = report.sales.slice(0, 200);
+  for (const sale of displayedSales) {
     doc
       .fontSize(9)
       .text(
         `${sale.code} | ${sale.saleDate.toISOString().slice(0, 10)} | ${sale.seller.username} | $${Math.round(Number(sale.totalAmount)).toLocaleString("es-CL")}`,
+      );
+  }
+
+  if (report.sales.length > 200) {
+    doc.moveDown();
+    doc
+      .fontSize(9)
+      .text(
+        `Nota: se muestran las primeras 200 ventas de ${report.sales.length} recuperadas. Utilice la exportación Excel para el detalle completo.`,
       );
   }
 

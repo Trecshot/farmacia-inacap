@@ -270,6 +270,9 @@ export const cancelPrescription = async (
   if (prescription.status === "DISPENSED") {
     throw new ApiError(409, "Una receta completamente dispensada no puede cancelarse");
   }
+  if (prescription.status === "CANCELLED") {
+    throw new ApiError(409, "La receta ya se encuentra cancelada");
+  }
 
   return prisma.prescription.update({
     where: { id },
@@ -305,11 +308,6 @@ export const createDispensationFromSale = async (
     throw new ApiError(409, "La venta debe estar completada");
   }
 
-  const existing = await prisma.dispensation.findFirst({
-    where: { saleId: sale.id, prescriptionId: prescription.id, status: "COMPLETED" },
-  });
-  if (existing) throw new ApiError(409, "Esta venta ya tiene una dispensación registrada para la receta");
-
   const matching = sale.items.filter(
     (item) => item.prescriptionItem?.prescriptionId === prescription.id,
   );
@@ -319,6 +317,20 @@ export const createDispensationFromSale = async (
   }
 
   return prisma.$transaction(async (tx) => {
+    const existing = await tx.dispensation.findFirst({
+      where: {
+        saleId: sale.id,
+        prescriptionId: prescription.id,
+        status: "COMPLETED",
+      },
+    });
+    if (existing) {
+      throw new ApiError(
+        409,
+        "Esta venta ya tiene una dispensación registrada para la receta",
+      );
+    }
+
     const dispensation = await tx.dispensation.create({
       data: {
         code: input.code,

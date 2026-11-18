@@ -7,6 +7,7 @@ import {
   ShoppingBag,
 } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
+import { PageLoader } from "../components/feedback/PageLoader";
 import {
   PurchaseOrderForm,
   type PurchaseLocation,
@@ -15,29 +16,27 @@ import {
   type PurchaseProduct,
   type PurchaseSupplier,
 } from "../components/inventory/PurchaseOrderForm";
-import { PageLoader } from "../components/feedback/PageLoader";
 import { PageHeader } from "../components/ui/PageHeader";
 import { ResponsiveTable } from "../components/ui/ResponsiveTable";
 import { StatusBadge } from "../components/ui/StatusBadge";
 import { useAuth } from "../context/AuthContext";
 import { useResource } from "../hooks/useResource";
-import { api } from "../lib/api";
 import { nullable, numeric, runApiAction } from "../lib/actionHelpers";
+import { api } from "../lib/api";
+import {
+  clp,
+  generateOperationCode,
+  normalizeText,
+} from "../lib/formatters";
 
 type FormValues = Record<string, string | number | boolean>;
-
-const clp = new Intl.NumberFormat("es-CL", {
-  style: "currency",
-  currency: "CLP",
-  maximumFractionDigits: 0,
-});
-const norm = (v: string) =>
-  v.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
 
 export const PurchasesPage = () => {
   const { hasPermission } = useAuth();
   const canCreate = hasPermission("purchases.create");
   const canReceive = hasPermission("purchases.receive");
+  const canReadProducts = hasPermission("products.read");
+  const canReadInventory = hasPermission("inventory.read");
 
   const [q, setQ] = useState("");
   const [modal, setModal] = useState<PurchaseModalMode>(null);
@@ -68,11 +67,11 @@ export const PurchasesPage = () => {
   const productsRes = useResource<
     PurchaseProduct[],
     { items: PurchaseProduct[] }
-  >("/products?limit=100", prodSel);
+  >("/products?limit=100", prodSel, { enabled: canReadProducts });
   const locRes = useResource<
     PurchaseLocation[],
     { locations: PurchaseLocation[] }
-  >("/inventory/locations", locSel);
+  >("/inventory/locations", locSel, { enabled: canReadInventory });
 
   const orders = useMemo(() => ordersRes.data ?? [], [ordersRes.data]);
   const suppliers = useMemo(() => suppliersRes.data ?? [], [suppliersRes.data]);
@@ -84,9 +83,9 @@ export const PurchasesPage = () => {
       orders.filter(
         (o) =>
           !q ||
-          norm(
+          normalizeText(
             [o.code, o.supplier?.businessName ?? "", o.status].join(" "),
-          ).includes(norm(q)),
+          ).includes(normalizeText(q)),
       ),
     [orders, q],
   );
@@ -372,7 +371,7 @@ export const PurchasesPage = () => {
                               className="row-action"
                               onClick={() => {
                                 setSelected(r);
-                                setReceiptCode(`REC-${Date.now()}`);
+                                setReceiptCode(generateOperationCode("REC"));
                                 setModal("receive");
                               }}
                             >

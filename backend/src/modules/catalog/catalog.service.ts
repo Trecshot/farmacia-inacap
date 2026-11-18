@@ -245,7 +245,7 @@ export const updateProduct = async (id: string, input: ProductUpdate) => {
       },
     });
 
-    if (activeIngredients && activeIngredients.length > 0) {
+    if (activeIngredients !== undefined) {
       const existingMap = new Map(
         currentProduct.activeIngredients.map((item) => [
           item.activeIngredientId,

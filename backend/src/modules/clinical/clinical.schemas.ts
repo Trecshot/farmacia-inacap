@@ -82,8 +82,26 @@ export const prescriptionCreateSchema = z.object({
   hasBalanceControl: z.boolean().default(false),
   patientId: z.string().uuid(),
   doctorId: z.string().uuid(),
-  fileUrl: z.string().trim().max(500).optional().nullable(),
-  retainedFileUrl: z.string().trim().max(500).optional().nullable(),
+  fileUrl: z
+    .string()
+    .trim()
+    .url("URL de archivo inválida")
+    .max(500)
+    .refine((value) => /^https?:\/\//i.test(value), {
+      message: "La URL del archivo debe utilizar protocolo http o https",
+    })
+    .optional()
+    .nullable(),
+  retainedFileUrl: z
+    .string()
+    .trim()
+    .url("URL de receta retenida inválida")
+    .max(500)
+    .refine((value) => /^https?:\/\//i.test(value), {
+      message: "La URL de receta retenida debe utilizar protocolo http o https",
+    })
+    .optional()
+    .nullable(),
   notes: z.string().trim().optional().nullable(),
   items: z.array(prescriptionItemSchema).min(1),
 });

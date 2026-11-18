@@ -9,5 +9,11 @@ export const refreshSchema = z.object({
   refreshToken: z.string().min(32),
 });
 
+export const optionalRefreshSchema = z
+  .object({
+    refreshToken: z.string().min(32).optional(),
+  })
+  .optional();
+
 export type LoginInput = z.infer<typeof loginSchema>;
 export type RefreshInput = z.infer<typeof refreshSchema>;

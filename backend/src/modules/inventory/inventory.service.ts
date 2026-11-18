@@ -27,12 +27,20 @@ export const listLocations = async () => {
 };
 
 export const listStock = async (query: StockQuery) => {
-  const { page, limit, search, productId, locationId, expiringDays } = query;
+  const { page, limit, search, productId, locationId, expiringDays, includeExpired } = query;
   const { skip, take } = getPagination(page, limit);
 
   const expirationLimit = expiringDays
     ? new Date(Date.now() + expiringDays * 24 * 60 * 60 * 1000)
     : undefined;
+
+  const now = new Date();
+  const expirationFilter =
+    includeExpired === "true"
+      ? (expirationLimit ? { lte: expirationLimit } : undefined)
+      : (expirationLimit
+          ? { gt: now, lte: expirationLimit }
+          : { gt: now });
 
   const where = {
     ...(locationId ? { locationId } : {}),
@@ -43,9 +51,7 @@ export const listStock = async (query: StockQuery) => {
     batch: {
       isBlocked: false,
       ...(productId ? { productId } : {}),
-      ...(expirationLimit
-        ? { expirationDate: { gt: new Date(), lte: expirationLimit } }
-        : { expirationDate: { gt: new Date() } }),
+      ...(expirationFilter ? { expirationDate: expirationFilter } : {}),
       ...(search
         ? {
             OR: [
@@ -265,21 +271,42 @@ export const adjustStock = async (userId: string, input: AdjustmentInput) => {
       );
     }
 
-    await tx.inventoryStock.upsert({
-      where: {
-        batchId_locationId: {
+    if (input.quantityDelta < 0) {
+      const absDelta = Math.abs(input.quantityDelta);
+      const updated = await tx.inventoryStock.updateMany({
+        where: {
           batchId: input.batchId,
           locationId: input.locationId,
+          quantity: { gte: absDelta + reserved },
         },
-      },
-      update: { quantity: next },
-      create: {
-        batchId: input.batchId,
-        locationId: input.locationId,
-        quantity: next,
-        reservedQuantity: 0,
-      },
-    });
+        data: {
+          quantity: { decrement: absDelta },
+        },
+      });
+
+      if (updated.count === 0) {
+        throw new ApiError(
+          409,
+          "Conflicto de concurrencia: stock insuficiente o reservado para aplicar el ajuste",
+        );
+      }
+    } else {
+      await tx.inventoryStock.upsert({
+        where: {
+          batchId_locationId: {
+            batchId: input.batchId,
+            locationId: input.locationId,
+          },
+        },
+        update: { quantity: { increment: input.quantityDelta } },
+        create: {
+          batchId: input.batchId,
+          locationId: input.locationId,
+          quantity: input.quantityDelta,
+          reservedQuantity: 0,
+        },
+      });
+    }
 
     return tx.inventoryMovement.create({
       data: {
@@ -381,21 +408,33 @@ export const getFefoAllocation = async (
   };
 };
 
-const upsertAlert = async (
-  type: "LOW_STOCK" | "OUT_OF_STOCK" | "EXPIRING_SOON" | "EXPIRED",
+type AlertTypeHandled = "LOW_STOCK" | "OUT_OF_STOCK" | "EXPIRING_SOON" | "EXPIRED";
+
+const buildAlertLookupKey = (
+  type: AlertTypeHandled,
+  productId: string,
+  batchId?: string,
+) => `${type}:${productId}:${batchId ?? ""}`;
+
+const upsertAlertWithMap = async (
+  alertMap: Map<string, { id: string }> | null,
+  type: AlertTypeHandled,
   title: string,
   message: string,
   productId: string,
   batchId?: string,
 ) => {
-  const existing = await prisma.alert.findFirst({
-    where: {
-      type,
-      status: { in: ["PENDING", "READ"] },
-      productId,
-      ...(batchId ? { batchId } : { batchId: null }),
-    },
-  });
+  const key = buildAlertLookupKey(type, productId, batchId);
+  const existing = alertMap
+    ? (alertMap.get(key) ?? null)
+    : await prisma.alert.findFirst({
+        where: {
+          type,
+          status: { in: ["PENDING", "READ"] },
+          productId,
+          ...(batchId ? { batchId } : { batchId: null }),
+        },
+      });
 
   if (existing) {
     return prisma.alert.update({
@@ -404,7 +443,7 @@ const upsertAlert = async (
     });
   }
 
-  return prisma.alert.create({
+  const created = await prisma.alert.create({
     data: {
       type,
       status: "PENDING",
@@ -414,33 +453,99 @@ const upsertAlert = async (
       batchId: batchId ?? null,
     },
   });
+
+  if (alertMap && created?.id) {
+    alertMap.set(key, { id: created.id });
+  }
+
+  return created;
 };
 
 export const scanAlerts = async (input: ScanAlerts) => {
   const now = new Date();
-  const products = await prisma.product.findMany({
-    where: { isActive: true },
-    include: {
-      batches: {
-        where: {
-          isBlocked: false,
-          expirationDate: { gt: now },
-        },
-        include: {
-          stocks: {
-            where: {
-              location: {
-                isActive: true,
-                type: { not: "QUARANTINE" },
+  const expirationLimit = new Date(
+    Date.now() + input.expiringDays * 24 * 60 * 60 * 1000,
+  );
+
+  const canBatchPreload = typeof prisma.alert.findMany === "function";
+
+  const [products, batches, activeAlerts] = await Promise.all([
+    prisma.product.findMany({
+      where: { isActive: true },
+      include: {
+        batches: {
+          where: {
+            isBlocked: false,
+            expirationDate: { gt: now },
+          },
+          include: {
+            stocks: {
+              where: {
+                location: {
+                  isActive: true,
+                  type: { not: "QUARANTINE" },
+                },
               },
             },
           },
         },
       },
-    },
-  });
+    }),
+    prisma.batch.findMany({
+      where: {
+        isBlocked: false,
+        expirationDate: { lte: expirationLimit },
+        stocks: {
+          some: {
+            quantity: { gt: 0 },
+            location: {
+              isActive: true,
+              type: { not: "QUARANTINE" },
+            },
+          },
+        },
+      },
+      include: { product: true },
+    }),
+    canBatchPreload
+      ? prisma.alert.findMany({
+          where: {
+            status: { in: ["PENDING", "READ"] },
+            type: {
+              in: ["LOW_STOCK", "OUT_OF_STOCK", "EXPIRING_SOON", "EXPIRED"],
+            },
+          },
+          select: {
+            id: true,
+            type: true,
+            productId: true,
+            batchId: true,
+          },
+        })
+      : Promise.resolve(null),
+  ]);
+
+  const alertMap = activeAlerts
+    ? new Map(
+        activeAlerts
+          .filter((a): a is typeof a & { productId: string } =>
+            Boolean(a.productId),
+          )
+          .map((a) => [
+            buildAlertLookupKey(
+              a.type as AlertTypeHandled,
+              a.productId,
+              a.batchId ?? undefined,
+            ),
+            { id: a.id },
+          ]),
+      )
+    : null;
 
   let createdOrUpdated = 0;
+  const resolveLowStockProductIds: string[] = [];
+  const resolveOutOfStockProductIds: string[] = [];
+  const resolveBothStockAlertsProductIds: string[] = [];
 
   for (const product of products) {
     const totalStock = product.batches.reduce(
@@ -455,83 +560,77 @@ export const scanAlerts = async (input: ScanAlerts) => {
     );
 
     if (totalStock <= 0) {
-      await upsertAlert(
+      await upsertAlertWithMap(
+        alertMap,
         "OUT_OF_STOCK",
         `Sin stock: ${product.name}`,
         `El producto ${product.name} no tiene stock disponible.`,
         product.id,
       );
-      await prisma.alert.updateMany({
-        where: {
-          productId: product.id,
-          type: "LOW_STOCK",
-          status: { in: ["PENDING", "READ"] },
-        },
-        data: {
-          status: "RESOLVED",
-          resolvedAt: now,
-        },
-      });
+      resolveLowStockProductIds.push(product.id);
       createdOrUpdated++;
     } else if (totalStock <= product.minimumStock) {
-      await upsertAlert(
+      await upsertAlertWithMap(
+        alertMap,
         "LOW_STOCK",
         `Stock bajo: ${product.name}`,
         `Stock disponible ${totalStock}; mínimo configurado ${product.minimumStock}.`,
         product.id,
       );
-      await prisma.alert.updateMany({
-        where: {
-          productId: product.id,
-          type: "OUT_OF_STOCK",
-          status: { in: ["PENDING", "READ"] },
-        },
-        data: {
-          status: "RESOLVED",
-          resolvedAt: now,
-        },
-      });
+      resolveOutOfStockProductIds.push(product.id);
       createdOrUpdated++;
     } else {
-      await prisma.alert.updateMany({
-        where: {
-          productId: product.id,
-          type: { in: ["OUT_OF_STOCK", "LOW_STOCK"] },
-          status: { in: ["PENDING", "READ"] },
-        },
-        data: {
-          status: "RESOLVED",
-          resolvedAt: now,
-        },
-      });
+      resolveBothStockAlertsProductIds.push(product.id);
     }
   }
 
-  const expirationLimit = new Date(
-    Date.now() + input.expiringDays * 24 * 60 * 60 * 1000,
-  );
-
-  const batches = await prisma.batch.findMany({
-    where: {
-      isBlocked: false,
-      expirationDate: { lte: expirationLimit },
-      stocks: {
-        some: {
-          quantity: { gt: 0 },
-          location: {
-            isActive: true,
-            type: { not: "QUARANTINE" },
-          },
-        },
+  if (resolveLowStockProductIds.length > 0) {
+    await prisma.alert.updateMany({
+      where: {
+        productId: { in: resolveLowStockProductIds },
+        type: "LOW_STOCK",
+        status: { in: ["PENDING", "READ"] },
       },
-    },
-    include: { product: true },
-  });
+      data: {
+        status: "RESOLVED",
+        resolvedAt: now,
+      },
+    });
+  }
+
+  if (resolveOutOfStockProductIds.length > 0) {
+    await prisma.alert.updateMany({
+      where: {
+        productId: { in: resolveOutOfStockProductIds },
+        type: "OUT_OF_STOCK",
+        status: { in: ["PENDING", "READ"] },
+      },
+      data: {
+        status: "RESOLVED",
+        resolvedAt: now,
+      },
+    });
+  }
+
+  if (resolveBothStockAlertsProductIds.length > 0) {
+    await prisma.alert.updateMany({
+      where: {
+        productId: { in: resolveBothStockAlertsProductIds },
+        type: { in: ["OUT_OF_STOCK", "LOW_STOCK"] },
+        status: { in: ["PENDING", "READ"] },
+      },
+      data: {
+        status: "RESOLVED",
+        resolvedAt: now,
+      },
+    });
+  }
 
   for (const batch of batches) {
     const expired = batch.expirationDate <= now;
 
-    await upsertAlert(
+    await upsertAlertWithMap(
+      alertMap,
       expired ? "EXPIRED" : "EXPIRING_SOON",
       expired
         ? `Lote vencido: ${batch.product.name}`
@@ -565,6 +664,7 @@ export const listAlerts = async (query: AlertsQuery) => {
         },
       },
     },
+    take: query.limit ?? 100,
     orderBy: { createdAt: "desc" },
   });
 };

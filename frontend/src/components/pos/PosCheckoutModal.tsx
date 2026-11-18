@@ -1,12 +1,7 @@
+import { clp } from "../../lib/formatters";
 import { ActionModal, type ActionField } from "../ui/ActionModal";
 
 export type CheckoutValues = Record<string, string | number | boolean>;
-
-const clp = new Intl.NumberFormat("es-CL", {
-  style: "currency",
-  currency: "CLP",
-  maximumFractionDigits: 0,
-});
 
 const checkoutFields: ActionField[] = [
   {
